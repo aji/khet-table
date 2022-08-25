@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use board::MctsPolicy;
+use board::{alpha_beta, MctsPolicy};
 use rand::seq::SliceRandom;
 
 pub mod board;
@@ -310,12 +310,12 @@ impl<P: MctsPolicy + Debug> GamePlayer for MctsPlayer<P> {
                 let stats = t.stats();
                 let (m, m_stats) = t.top_move();
                 print!(
-                    "\x1b[G\x1b[K{} d={} N={} {}({}/{}) {:.1}/s",
+                    "\x1b[G\x1b[K{} d={} N={} {}({:.3}*{}) {:.1}/s",
                     clock,
                     stats.max_depth,
                     stats.total_visits,
                     TranscriptItem::new(t.position(), m),
-                    m_stats.wins,
+                    m_stats.wins as f64 / m_stats.visits as f64,
                     m_stats.visits,
                     stats.total_visits as f64 / clock.turn_start.elapsed().as_secs_f64(),
                 );
@@ -348,6 +348,27 @@ impl GamePlayer for RandomPlayer {
 impl Display for RandomPlayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "random()")
+    }
+}
+
+struct AlphaBetaPlayer;
+
+impl GamePlayer for AlphaBetaPlayer {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+        let turn_duration = Duration::from_secs_f64(
+            (clock.incr * 0.9)
+                .max(clock.my_remaining() * 0.2)
+                .min(clock.my_remaining() * 0.9),
+        );
+        alpha_beta(&clock, turn_duration, pos.clone(), &board::eval_material)
+            .get_move()
+            .unwrap()
+    }
+}
+
+impl Display for AlphaBetaPlayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "alpha-beta()")
     }
 }
 
@@ -392,7 +413,7 @@ fn run_game(
             };
         }
 
-        if log.items.len() > 200 {
+        if log.items.len() >= 200 {
             return GameResult::Draw;
         }
 
@@ -510,10 +531,12 @@ impl League {
 fn main() {
     env_logger::init();
 
-    let mut league = League::new(20., 1., 20.);
+    let mut league = League::new(60., 1., 60.);
 
+    league.add_player(AlphaBetaPlayer);
     league.add_player(MctsPlayer::new(board::BackupRollout::new(1.0)));
     league.add_player(MctsPlayer::new(board::UniformRollout::new(1.0)));
+    league.add_player(MctsPlayer::new(board::CoinTossRollout));
 
     loop {
         match league.add_game() {

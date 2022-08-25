@@ -1,5 +1,11 @@
 use rand::{seq::SliceRandom, thread_rng};
-use std::{fmt, io::Write};
+use std::{
+    fmt,
+    io::Write,
+    time::{Duration, Instant},
+};
+
+use crate::FischerClock;
 
 type Index = usize;
 
@@ -526,7 +532,7 @@ impl Position {
     }
 
     pub fn moves(&self) -> Vec<Move> {
-        let mut moves = Vec::new();
+        let mut moves = Vec::with_capacity(100);
         self.add_moves(&mut moves);
         moves
     }
@@ -899,15 +905,45 @@ impl Ord for AlphaBetaResult {
     }
 }
 
+struct AlphaBetaStats {
+    last_print: Instant,
+    max_depth: i64,
+    this_depth_min: i64,
+    this_depth: i64,
+    root_dur: f64,
+    root_progress: i64,
+    root_number: i64,
+    root_count: i64,
+}
+
 /// Chooses a move using alpha-beta tree search and the given evaluation
 /// heuristic. If the given position is non-terminal and the depth limit is
 /// greater than 0, this function will always return AlphaBeta::Move.
 pub fn alpha_beta<F: Fn(Position) -> i64>(
+    clock: &FischerClock,
+    dur: Duration,
     pos: Position,
-    depth_limit: i64,
     eval: &F,
 ) -> AlphaBetaResult {
-    alpha_beta_iter(pos, depth_limit, eval, true, i64::MIN, i64::MAX)
+    alpha_beta_iter(
+        clock,
+        &mut AlphaBetaStats {
+            last_print: Instant::now(),
+            max_depth: 0,
+            this_depth_min: 100,
+            this_depth: 0,
+            root_dur: 0.0,
+            root_progress: 0,
+            root_number: 0,
+            root_count: 0,
+        },
+        dur,
+        pos,
+        eval,
+        0,
+        i64::MIN,
+        i64::MAX,
+    )
 }
 
 pub fn distance_to(r0: u8, c0: u8, r1: u8, c1: u8) -> u8 {
@@ -948,54 +984,106 @@ pub fn eval_material(pos: Position) -> i64 {
         }
     }
 
-    value
+    let mut white_moves = Vec::with_capacity(100);
+    let mut red_moves = Vec::with_capacity(100);
+    pos.board.add_moves_for_color(CC_WHITE, &mut white_moves);
+    pos.board.add_moves_for_color(CC_RED, &mut red_moves);
+
+    let white_mobility = white_moves.len() as i64 / 10;
+    let red_mobility = red_moves.len() as i64 / 10;
+
+    value + white_mobility - red_mobility
 }
 
 fn alpha_beta_iter<F: Fn(Position) -> i64>(
+    clock: &FischerClock,
+    stats: &mut AlphaBetaStats,
+    dur: Duration,
     pos: Position,
-    depth_limit: i64,
     eval: &F,
-    is_root: bool,
+    depth: i64,
     mut alpha: i64,
     mut beta: i64,
 ) -> AlphaBetaResult {
     if let Some(winner) = pos.winner() {
         return AlphaBetaResult::Terminal(winner);
     }
-    if depth_limit == 0 {
+    if dur.is_zero() {
         return AlphaBetaResult::DepthLimit(eval(pos));
     }
 
     let moves = {
         let mut moves = pos.moves();
-        if depth_limit > 3 {
-            moves.shuffle(&mut thread_rng());
-        }
+        moves.shuffle(&mut thread_rng());
         moves
     };
 
     let move_count = moves.len();
+    let turn_start = Instant::now();
+    let turn_end = turn_start + dur;
 
-    if pos.to_move == Color::White {
-        let mut favorite_child = AlphaBetaResult::DepthLimit(i64::MIN);
-        for (i, m) in moves.into_iter().enumerate() {
-            let mut next_pos = pos.clone();
-            next_pos.apply_move(m);
-            if is_root {
-                print!(
-                    "\x1b[G\x1b[KA-B({}/{}) {} [a={}]",
-                    i + 1,
-                    move_count,
-                    favorite_child
-                        .get_move()
-                        .map(|m| format!("{}", crate::TranscriptItem::new(&pos, m)))
-                        .unwrap_or_else(|| "(n/a)".to_owned()),
-                    alpha
-                );
-                std::io::stdout().lock().flush().unwrap();
+    if depth == 0 {
+        stats.root_dur = dur.as_secs_f64();
+        stats.root_count = move_count as i64;
+        stats.root_progress = 0;
+    }
+    stats.max_depth = depth.max(stats.max_depth);
+    stats.this_depth_min = depth.min(stats.this_depth_min);
+    stats.this_depth = depth.max(stats.this_depth);
+
+    let maximizing = pos.to_move == Color::White;
+
+    let mut favorite_child =
+        AlphaBetaResult::DepthLimit(if maximizing { i64::MIN } else { i64::MAX });
+    for (i, m) in moves.into_iter().enumerate() {
+        if depth == 0 {
+            stats.root_progress = i as i64;
+            stats.root_number = if maximizing { alpha } else { beta };
+        }
+
+        let now = Instant::now();
+        if (now - stats.last_print).as_secs_f64() > 0.1 {
+            print!(
+                "\x1b[G\x1b[K{} d={:2}..{:2} max={:2} ({}/{}) [x={}] {:.1}s",
+                clock,
+                stats.this_depth_min,
+                stats.this_depth,
+                stats.max_depth,
+                stats.root_progress,
+                stats.root_count,
+                stats.root_number,
+                stats.root_dur
+            );
+            std::io::stdout().lock().flush().unwrap();
+            stats.this_depth_min = 100;
+            stats.this_depth = 0;
+            stats.last_print = now;
+        }
+
+        let child_dur = if turn_end <= now {
+            if depth != 0 {
+                return AlphaBetaResult::DepthLimit(eval(pos));
             }
-            let child =
-                alpha_beta_iter(next_pos, depth_limit - 1, eval, false, alpha, beta).parent(m);
+            dur.div_f64(move_count as f64 / 8.0)
+        } else {
+            (turn_end - now).div_f64((move_count - i) as f64 / 4.0)
+        };
+
+        let mut next_pos = pos.clone();
+        next_pos.apply_move(m);
+        let child = alpha_beta_iter(
+            clock,
+            stats,
+            child_dur,
+            next_pos,
+            eval,
+            depth + 1,
+            alpha,
+            beta,
+        )
+        .parent(m);
+
+        if maximizing {
             if child.value() > favorite_child.value() {
                 favorite_child = child;
             }
@@ -1003,31 +1091,7 @@ fn alpha_beta_iter<F: Fn(Position) -> i64>(
                 break;
             }
             alpha = alpha.max(child.value());
-        }
-        if is_root {
-            println!();
-        }
-        favorite_child
-    } else {
-        let mut favorite_child = AlphaBetaResult::DepthLimit(i64::MAX);
-        for (i, m) in moves.into_iter().enumerate() {
-            let mut next_pos = pos.clone();
-            next_pos.apply_move(m);
-            if is_root {
-                print!(
-                    "\x1b[G\x1b[KA-B({}/{}) {} [b={}]",
-                    i + 1,
-                    move_count,
-                    favorite_child
-                        .get_move()
-                        .map(|m| format!("{}", crate::TranscriptItem::new(&pos, m)))
-                        .unwrap_or_else(|| "(n/a)".to_owned()),
-                    beta
-                );
-                std::io::stdout().lock().flush().unwrap();
-            }
-            let child =
-                alpha_beta_iter(next_pos, depth_limit - 1, eval, false, alpha, beta).parent(m);
+        } else {
             if child.value() < favorite_child.value() {
                 favorite_child = child;
             }
@@ -1036,11 +1100,9 @@ fn alpha_beta_iter<F: Fn(Position) -> i64>(
             }
             beta = beta.min(child.value());
         }
-        if is_root {
-            println!();
-        }
-        favorite_child
     }
+
+    favorite_child
 }
 
 /*
