@@ -510,12 +510,10 @@ impl League {
 fn main() {
     env_logger::init();
 
-    let mut league = League::new(30., 30., 30.);
+    let mut league = League::new(20., 1., 20.);
 
-    league.add_player(RandomPlayer);
-    league.add_player(MctsPlayer::new(board::CoinTossRollout));
-    league.add_player(MctsPlayer::new(board::UniformRollout::new(1.0)));
     league.add_player(MctsPlayer::new(board::BackupRollout::new(1.0)));
+    league.add_player(MctsPlayer::new(board::UniformRollout::new(1.0)));
 
     loop {
         match league.add_game() {

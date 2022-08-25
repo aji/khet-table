@@ -796,6 +796,37 @@ impl MctsPolicy for CoinTossRollout {
     }
 }
 
+pub struct EvalRollout<P> {
+    coeff: f64,
+    policy: P,
+}
+
+impl<P> EvalRollout<P> {
+    pub fn new(coeff: f64, policy: P) -> EvalRollout<P> {
+        EvalRollout { coeff, policy }
+    }
+}
+
+impl<P: Fn(Position) -> i64> MctsPolicy for EvalRollout<P> {
+    fn coeff(&self) -> f64 {
+        self.coeff
+    }
+
+    fn rollout(&self, pos: Position) -> Color {
+        let expect = (((self.policy)(pos) as f64 / 50.).tanh() + 1.0) / 2.0;
+        match rand::random::<f64>() < expect {
+            true => Color::White,
+            false => Color::Red,
+        }
+    }
+}
+
+impl<P> fmt::Debug for EvalRollout<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Eval{{c={:.1}}}", self.coeff)
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum AlphaBetaResult {
     DepthLimit(i64),
