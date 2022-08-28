@@ -1,5 +1,6 @@
 use rand::{seq::SliceRandom, thread_rng};
 use std::{
+    collections::HashMap,
     fmt,
     io::Write,
     time::{Duration, Instant},
@@ -31,8 +32,8 @@ const CR_ANUBIS: u8 = 0x30;
 const CR_SPHINX: u8 = 0x40;
 const CR_PHARAOH: u8 = 0x50;
 
-const DROW: [i8; 4] = [-1, 0, 1, 0];
-const DCOL: [i8; 4] = [0, 1, 0, -1];
+const DROW: [isize; 4] = [-1, 0, 1, 0];
+const DCOL: [isize; 4] = [0, 1, 0, -1];
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Direction {
@@ -49,7 +50,7 @@ pub enum DirDelta {
     CounterClockwise,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Color {
     White,
     Red,
@@ -119,29 +120,45 @@ impl Piece {
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct MoveInfo {
-    pub row: u8,
-    pub col: u8,
-    pub drow: i8,
-    pub dcol: i8,
+    pub row: usize,
+    pub col: usize,
+    pub drow: isize,
+    pub dcol: isize,
     pub ddir: DirDelta,
 }
 
 impl MoveInfo {
     pub fn decode(m: Move) -> MoveInfo {
-        let sr: u8 = (m.sx / 10) as u8;
-        let sc: u8 = (m.sx % 10) as u8;
-        let dr: u8 = (m.dx / 10) as u8;
-        let dc: u8 = (m.dx % 10) as u8;
+        let sr = m.sx / 10;
+        let sc = m.sx % 10;
+        let dr = m.dx / 10;
+        let dc = m.dx % 10;
         MoveInfo {
             row: sr,
             col: sc,
-            drow: dr as i8 - sr as i8,
-            dcol: dc as i8 - sc as i8,
+            drow: dr as isize - sr as isize,
+            dcol: dc as isize - sc as isize,
             ddir: match m.ddir {
                 0 => DirDelta::None,
                 1 => DirDelta::Clockwise,
                 3 => DirDelta::CounterClockwise,
                 _ => panic!(),
+            },
+        }
+    }
+
+    pub fn encode(self) -> Move {
+        let sr = self.row;
+        let sc = self.col;
+        let dr = (self.row as isize + self.drow) as usize;
+        let dc = (self.col as isize + self.dcol) as usize;
+        Move {
+            sx: sr * 10 + sc,
+            dx: dr * 10 + dc,
+            ddir: match self.ddir {
+                DirDelta::None => 0,
+                DirDelta::Clockwise => 1,
+                DirDelta::CounterClockwise => 3,
             },
         }
     }
@@ -154,19 +171,19 @@ pub struct Move {
     ddir: u8,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 struct Board {
     data: [u8; 80],
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 struct LaserPathElement {
-    r: i8,
-    c: i8,
+    r: isize,
+    c: isize,
     d: u8,
 }
 
-fn in_bounds(r: i8, c: i8) -> bool {
+fn in_bounds(r: isize, c: isize) -> bool {
     0 <= r && r < 8 && 0 <= c && c < 10
 }
 
@@ -211,7 +228,7 @@ impl Board {
         }
     }
 
-    fn add_moves_for_piece(&self, r: i8, c: i8, moves: &mut Vec<Move>) {
+    fn add_moves_for_piece(&self, r: usize, c: usize, moves: &mut Vec<Move>) {
         let sx: Index = (r * 10 + c) as Index;
         let src = self.data[sx];
         if src == C_EMPTY {
@@ -251,15 +268,15 @@ impl Board {
     fn add_motion_move_for_piece(
         &self,
         src: u8,
-        r: i8,
-        c: i8,
+        r: usize,
+        c: usize,
         sx: Index,
-        dr: i8,
-        dc: i8,
+        dr: isize,
+        dc: isize,
         moves: &mut Vec<Move>,
     ) {
-        let nr = r + dr;
-        let nc = c + dc;
+        let nr = r as isize + dr;
+        let nc = c as isize + dc;
         if !in_bounds(nr, nc) {
             return;
         }
@@ -283,7 +300,7 @@ impl Board {
     fn add_moves_for_color(&self, color: u8, moves: &mut Vec<Move>) {
         for r in 0..8 {
             for c in 0..10 {
-                let tgt = self.data[(r * 10 + c) as usize];
+                let tgt = self.data[r * 10 + c];
                 if tgt & CC_MASK == color {
                     self.add_moves_for_piece(r, c, moves);
                 }
@@ -383,7 +400,7 @@ impl FromIterator<u8> for Board {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Position {
     to_move: Color,
     board: Board,
@@ -419,6 +436,63 @@ impl Position {
         data[73] = CC_WHITE | CR_ANUBIS | CD_NORTH;
         data[74] = CC_WHITE | CR_PHARAOH | CD_NORTH;
         data[75] = CC_WHITE | CR_ANUBIS | CD_NORTH;
+        data[79] = CC_WHITE | CR_SPHINX | CD_NORTH;
+        Position {
+            to_move: Color::White,
+            board: data.iter().copied().collect(),
+            has_white: true,
+            has_red: true,
+        }
+    }
+
+    pub fn new_tmp() -> Position {
+        let mut data: Vec<u8> = (0..80).map(|_| C_EMPTY).collect();
+        /*
+        data[0] = CC_RED | CR_SPHINX | CD_SOUTH;
+        data[4] = CC_RED | CR_ANUBIS | CD_SOUTH;
+        data[9] = CC_WHITE | CR_PYRAMID | CD_SOUTH;
+        data[12] = CC_RED | CR_PYRAMID | CD_SOUTH;
+        data[14] = CC_RED | CR_PHARAOH | CD_SOUTH;
+        data[15] = CC_RED | CR_PYRAMID | CD_EAST;
+        data[23] = CC_RED | CR_SCARAB | CD_EAST;
+        data[30] = CC_RED | CR_PYRAMID | CD_NORTH;
+        data[40] = CC_RED | CR_PYRAMID | CD_EAST;
+        data[41] = CC_RED | CR_SCARAB | CD_NORTH;
+        data[42] = CC_WHITE | CR_PYRAMID | CD_WEST;
+        data[45] = CC_WHITE | CR_SCARAB | CD_NORTH;
+        data[46] = CC_WHITE | CR_SCARAB | CD_EAST;
+        data[48] = CC_WHITE | CR_PYRAMID | CD_SOUTH;
+        data[55] = CC_RED | CR_PYRAMID | CD_NORTH;
+        data[63] = CC_WHITE | CR_PYRAMID | CD_EAST;
+        data[64] = CC_WHITE | CR_ANUBIS | CD_NORTH;
+        data[66] = CC_WHITE | CR_PYRAMID | CD_NORTH;
+        data[73] = CC_WHITE | CR_ANUBIS | CD_NORTH;
+        data[75] = CC_WHITE | CR_PHARAOH | CD_NORTH;
+        data[76] = CC_RED | CR_PYRAMID | CD_EAST;
+        data[79] = CC_WHITE | CR_SPHINX | CD_NORTH;
+        */
+        data[0] = CC_RED | CR_SPHINX | CD_SOUTH;
+        data[4] = CC_RED | CR_ANUBIS | CD_SOUTH;
+        data[5] = CC_RED | CR_PHARAOH | CD_SOUTH;
+        data[6] = CC_RED | CR_ANUBIS | CD_SOUTH;
+        data[12] = CC_RED | CR_PYRAMID | CD_SOUTH;
+        data[15] = CC_RED | CR_PYRAMID | CD_EAST;
+        data[19] = CC_WHITE | CR_PYRAMID | CD_SOUTH;
+        data[23] = CC_RED | CR_SCARAB | CD_EAST;
+        data[30] = CC_RED | CR_PYRAMID | CD_NORTH;
+        data[40] = CC_RED | CR_PYRAMID | CD_EAST;
+        data[41] = CC_RED | CR_SCARAB | CD_NORTH;
+        data[42] = CC_WHITE | CR_PYRAMID | CD_WEST;
+        data[45] = CC_WHITE | CR_SCARAB | CD_NORTH;
+        data[46] = CC_WHITE | CR_SCARAB | CD_EAST;
+        data[48] = CC_WHITE | CR_PYRAMID | CD_SOUTH;
+        data[55] = CC_RED | CR_PYRAMID | CD_NORTH;
+        data[63] = CC_WHITE | CR_PYRAMID | CD_EAST;
+        data[64] = CC_WHITE | CR_ANUBIS | CD_NORTH;
+        data[66] = CC_WHITE | CR_PYRAMID | CD_NORTH;
+        data[73] = CC_WHITE | CR_ANUBIS | CD_NORTH;
+        data[75] = CC_WHITE | CR_PHARAOH | CD_NORTH;
+        data[76] = CC_RED | CR_PYRAMID | CD_EAST;
         data[79] = CC_WHITE | CR_SPHINX | CD_NORTH;
         Position {
             to_move: Color::White,
@@ -506,9 +580,9 @@ impl Position {
         println!("");
     }
 
-    pub fn get(&self, row: u8, col: u8) -> Cell {
+    pub fn get(&self, row: usize, col: usize) -> Cell {
         if row < 8 && col < 10 {
-            Cell(self.board.data[(row * 10 + col) as usize])
+            Cell(self.board.data[row * 10 + col])
         } else {
             Cell(C_EMPTY) // technically an error
         }
@@ -552,10 +626,21 @@ impl Position {
 
 pub type MctsArena<'a> = typed_arena::Arena<MctsNode<'a>>;
 
+struct Indent(usize);
+
+impl fmt::Display for Indent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for _ in 0..self.0 {
+            write!(f, "    ")?;
+        }
+        Ok(())
+    }
+}
+
 pub struct MctsNode<'a> {
-    height: i64,
-    visits: i64,
-    wins: i64,
+    height: isize,
+    visits: isize,
+    wins: isize,
     moves: Vec<Move>,
     children: Vec<Option<&'a mut MctsNode<'a>>>,
 }
@@ -570,6 +655,41 @@ impl<'a> MctsNode<'a> {
             wins: 0,
             moves,
             children,
+        }
+    }
+
+    fn dump(
+        &self,
+        label: String,
+        pos: &Position,
+        depth: usize,
+        depth_limit: usize,
+        parent_visits: isize,
+    ) {
+        println!(
+            "{}-->{} {}={:.3}*{} uct={:.2} ({})",
+            Indent(depth),
+            label,
+            self.wins,
+            self.wins as f64 / self.visits as f64,
+            self.visits,
+            self.wins as f64 / self.visits as f64
+                + (2. * (parent_visits as f64).log(std::f64::consts::E) / self.visits as f64)
+                    .sqrt(),
+            self.height
+        );
+
+        if depth_limit == 0 {
+            return;
+        }
+
+        for (i, m) in self.moves.iter().enumerate() {
+            let mut next_pos = pos.clone();
+            next_pos.apply_move(*m);
+            let label = format!("{}", crate::TranscriptItem::new(pos, *m));
+            if let Some(ref child) = self.children[i] {
+                child.dump(label, &next_pos, depth + 1, depth_limit - 1, self.visits);
+            }
         }
     }
 
@@ -610,6 +730,7 @@ impl<'a> MctsNode<'a> {
         } else {
             let node = arena.alloc(MctsNode::new(pos));
             let winner = policy.rollout(pos);
+            node.visits = 1;
             if winner == to_move {
                 node.wins = 1;
             }
@@ -639,15 +760,15 @@ pub struct MctsTree<'a> {
 
 #[derive(Copy, Clone, Debug)]
 pub struct MctsTreeStats {
-    pub max_depth: i64,
-    pub total_visits: i64,
+    pub max_depth: isize,
+    pub total_visits: isize,
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct MctsMoveStats {
-    pub depth: i64,
-    pub wins: i64,
-    pub visits: i64,
+    pub depth: isize,
+    pub wins: isize,
+    pub visits: isize,
 }
 
 pub trait MctsPolicy {
@@ -659,6 +780,10 @@ impl<'a> MctsTree<'a> {
     pub fn new(pos: Position, arena: &'a MctsArena<'a>) -> MctsTree<'a> {
         let root = MctsNode::new(pos);
         MctsTree { pos, arena, root }
+    }
+
+    pub fn dump(&self) {
+        self.root.dump("root".to_owned(), &self.pos, 0, 2, 1);
     }
 
     pub fn stats(&self) -> MctsTreeStats {
@@ -825,7 +950,7 @@ impl<P> EvalRollout<P> {
     }
 }
 
-impl<P: Fn(Position) -> i64> MctsPolicy for EvalRollout<P> {
+impl<P: Fn(Position) -> isize> MctsPolicy for EvalRollout<P> {
     fn coeff(&self) -> f64 {
         self.coeff
     }
@@ -845,121 +970,15 @@ impl<P> fmt::Debug for EvalRollout<P> {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum AlphaBetaResult {
-    DepthLimit(i64),
-    Move(Move, i64),
-    Terminal(Color),
-    Win(Move, Color, i64),
+pub fn distance_to(r0: usize, c0: usize, r1: usize, c1: usize) -> u8 {
+    Ord::max(
+        (r0 as isize - r1 as isize).abs(),
+        (c0 as isize - c1 as isize).abs(),
+    ) as u8
 }
 
-impl AlphaBetaResult {
-    pub fn parent(self, m: Move) -> AlphaBetaResult {
-        match self {
-            AlphaBetaResult::DepthLimit(value) => AlphaBetaResult::Move(m, value),
-            AlphaBetaResult::Move(_, value) => AlphaBetaResult::Move(m, value),
-            AlphaBetaResult::Terminal(color) => AlphaBetaResult::Win(m, color, 1),
-            AlphaBetaResult::Win(_, color, turns) => AlphaBetaResult::Win(m, color, turns + 1),
-        }
-    }
-
-    pub fn value(self) -> i64 {
-        match self {
-            AlphaBetaResult::DepthLimit(value) => value,
-            AlphaBetaResult::Move(_, value) => value,
-            AlphaBetaResult::Terminal(color) => match color {
-                Color::White => 1000,
-                Color::Red => -1000,
-            },
-            AlphaBetaResult::Win(_, color, turns) => match color {
-                Color::White => 1000 - turns,
-                Color::Red => -1000 + turns,
-            },
-        }
-    }
-
-    pub fn get_move(self) -> Option<Move> {
-        match self {
-            AlphaBetaResult::DepthLimit(_) => None,
-            AlphaBetaResult::Move(m, _) => Some(m),
-            AlphaBetaResult::Terminal(_) => None,
-            AlphaBetaResult::Win(m, _, _) => Some(m),
-        }
-    }
-
-    pub fn unwrap(self) -> (Move, i64) {
-        let value = self.value();
-        match self {
-            AlphaBetaResult::Move(m, _) => (m, value),
-            AlphaBetaResult::Win(m, _, _) => (m, value),
-            _ => panic!("({:?})::unwrap()", self),
-        }
-    }
-}
-
-impl PartialEq for AlphaBetaResult {
-    fn eq(&self, other: &Self) -> bool {
-        self.value() == other.value()
-    }
-}
-
-impl Eq for AlphaBetaResult {}
-
-impl PartialOrd for AlphaBetaResult {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        PartialOrd::partial_cmp(&self.value(), &other.value())
-    }
-}
-
-impl Ord for AlphaBetaResult {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        Ord::cmp(&self.value(), &other.value())
-    }
-}
-
-struct AlphaBetaStats {
-    last_print: Instant,
-    min_depth: i64,
-    max_depth: i64,
-    root_progress: i64,
-    root_number: i64,
-    root_count: i64,
-}
-
-/// Chooses a move using alpha-beta tree search and the given evaluation
-/// heuristic. If the given position is non-terminal and the depth limit is
-/// greater than 0, this function will always return AlphaBeta::Move.
-pub fn alpha_beta<B: TreeComputeBudget, F: Fn(Position) -> i64>(
-    clock: &FischerClock,
-    pos: Position,
-    budget: B,
-    eval: &F,
-) -> AlphaBetaResult {
-    alpha_beta_iter(
-        clock,
-        pos,
-        budget,
-        eval,
-        &mut AlphaBetaStats {
-            last_print: Instant::now(),
-            min_depth: 1000,
-            max_depth: 0,
-            root_progress: 0,
-            root_number: 0,
-            root_count: 0,
-        },
-        0,
-        i64::MIN,
-        i64::MAX,
-    )
-}
-
-pub fn distance_to(r0: u8, c0: u8, r1: u8, c1: u8) -> u8 {
-    Ord::max((r0 as i8 - r1 as i8).abs(), (c0 as i8 - c1 as i8).abs()) as u8
-}
-
-pub fn eval_material(pos: Position) -> i64 {
-    let mut value: i64 = 0;
+pub fn eval_material(pos: Position) -> isize {
+    let mut value: isize = 0;
 
     if let Some(winner) = pos.winner() {
         return match winner {
@@ -973,9 +992,9 @@ pub fn eval_material(pos: Position) -> i64 {
             let distance = distance_to(3, 4, row, col)
                 .min(distance_to(4, 4, row, col))
                 .min(distance_to(3, 5, row, col))
-                .min(distance_to(4, 5, row, col)) as i64;
+                .min(distance_to(4, 5, row, col)) as isize;
             if let Some(piece) = Piece::decode(pos.get(row, col)) {
-                let piece_value: i64 = match piece.role {
+                let piece_value: isize = match piece.role {
                     Role::Pyramid => {
                         let edge_pyramid = (col == 0 && piece.dir == Direction::North)
                             || (col == 9 && piece.dir == Direction::South);
@@ -1004,14 +1023,14 @@ pub fn eval_material(pos: Position) -> i64 {
     pos.board.add_moves_for_color(CC_WHITE, &mut white_moves);
     pos.board.add_moves_for_color(CC_RED, &mut red_moves);
 
-    let white_mobility = white_moves.len() as i64 / 10;
-    let red_mobility = red_moves.len() as i64 / 10;
+    let white_mobility = white_moves.len() as isize / 10;
+    let red_mobility = red_moves.len() as isize / 10;
 
     value + white_mobility - red_mobility
 }
 
-pub fn eval_laser(pos: Position) -> i64 {
-    let mut value: i64 = 0;
+pub fn eval_laser(pos: Position) -> isize {
+    let mut value: isize = 0;
 
     if let Some(winner) = pos.winner() {
         return match winner {
@@ -1025,9 +1044,9 @@ pub fn eval_laser(pos: Position) -> i64 {
             let distance = distance_to(3, 4, row, col)
                 .min(distance_to(4, 4, row, col))
                 .min(distance_to(3, 5, row, col))
-                .min(distance_to(4, 5, row, col)) as i64;
+                .min(distance_to(4, 5, row, col)) as isize;
             if let Some(piece) = Piece::decode(pos.get(row, col)) {
-                let piece_value: i64 = match piece.role {
+                let piece_value: isize = match piece.role {
                     Role::Pyramid => {
                         let edge_pyramid = (col == 0 && piece.dir == Direction::North)
                             || (col == 9 && piece.dir == Direction::South);
@@ -1057,7 +1076,7 @@ pub fn eval_laser(pos: Position) -> i64 {
                 let r = pt.r + dr;
                 let c = pt.c + dc;
                 if in_bounds(r, c) {
-                    if let Some(piece) = Piece::decode(pos.get(r as u8, c as u8)) {
+                    if let Some(piece) = Piece::decode(pos.get(r as usize, c as usize)) {
                         if piece.role == Role::Pyramid || piece.role == Role::Scarab {
                             value += if piece.color == Color::White { 2 } else { -1 };
                         }
@@ -1073,7 +1092,7 @@ pub fn eval_laser(pos: Position) -> i64 {
                 let r = pt.r + dr;
                 let c = pt.c + dc;
                 if in_bounds(r, c) {
-                    if let Some(piece) = Piece::decode(pos.get(r as u8, c as u8)) {
+                    if let Some(piece) = Piece::decode(pos.get(r as usize, c as usize)) {
                         if piece.role == Role::Pyramid || piece.role == Role::Scarab {
                             value += if piece.color == Color::White { 1 } else { -2 };
                         }
@@ -1088,8 +1107,8 @@ pub fn eval_laser(pos: Position) -> i64 {
     pos.board.add_moves_for_color(CC_WHITE, &mut white_moves);
     pos.board.add_moves_for_color(CC_RED, &mut red_moves);
 
-    let white_mobility = white_moves.len() as i64 / 10;
-    let red_mobility = red_moves.len() as i64 / 10;
+    let white_mobility = white_moves.len() as isize / 10;
+    let red_mobility = red_moves.len() as isize / 10;
 
     value + white_mobility - red_mobility
 }
@@ -1157,9 +1176,9 @@ pub enum TreeTimeLimit {
     Depth(isize),
 }
 
-const LIMIT_DEPTH_2: Duration = Duration::from_micros(600);
-const LIMIT_DEPTH_3: Duration = Duration::from_micros(30_000);
-const LIMIT_DEPTH_4: Duration = Duration::from_micros(1_500_000);
+const LIMIT_DEPTH_2: Duration = Duration::from_micros(500);
+const LIMIT_DEPTH_3: Duration = Duration::from_micros(25_000);
+const LIMIT_DEPTH_4: Duration = Duration::from_micros(1_200_000);
 
 impl TreeTimeLimit {
     fn new(now: Instant, dur: Duration) -> TreeTimeLimit {
@@ -1209,15 +1228,165 @@ impl TreeComputeBudget for TreeTimeLimit {
     }
 }
 
-fn alpha_beta_iter<B: TreeComputeBudget, F: Fn(Position) -> i64>(
+#[derive(Debug, Copy, Clone)]
+pub enum AlphaBetaResult {
+    DepthLimit(isize),
+    Move(Move, isize),
+    Terminal(Color),
+    Win(Move, Color, isize),
+}
+
+impl AlphaBetaResult {
+    pub fn parent(self, m: Move) -> AlphaBetaResult {
+        use AlphaBetaResult::*;
+        match self {
+            DepthLimit(value) => Move(m, value),
+            Move(_, value) => Move(m, value),
+            Terminal(color) => Win(m, color, 1),
+            Win(_, color, turns) => Win(m, color, turns + 1),
+        }
+    }
+
+    pub fn value(self) -> isize {
+        use AlphaBetaResult::*;
+        match self {
+            DepthLimit(value) => value,
+            Move(_, value) => value,
+            Terminal(color) => match color {
+                Color::White => 1000,
+                Color::Red => -1000,
+            },
+            Win(_, color, turns) => match color {
+                Color::White => 1000 - turns,
+                Color::Red => -1000 + turns,
+            },
+        }
+    }
+
+    pub fn get_move(self) -> Option<Move> {
+        use AlphaBetaResult::*;
+        match self {
+            DepthLimit(_) => None,
+            Move(m, _) => Some(m),
+            Terminal(_) => None,
+            Win(m, _, _) => Some(m),
+        }
+    }
+
+    pub fn unwrap(self) -> (Move, isize) {
+        use AlphaBetaResult::*;
+        let value = self.value();
+        match self {
+            Move(m, _) => (m, value),
+            Win(m, _, _) => (m, value),
+            _ => panic!("({:?})::unwrap()", self),
+        }
+    }
+}
+
+impl PartialEq for AlphaBetaResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.value() == other.value()
+    }
+}
+
+impl Eq for AlphaBetaResult {}
+
+impl PartialOrd for AlphaBetaResult {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        PartialOrd::partial_cmp(&self.value(), &other.value())
+    }
+}
+
+impl Ord for AlphaBetaResult {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Ord::cmp(&self.value(), &other.value())
+    }
+}
+
+struct AlphaBetaStats {
+    last_print: Instant,
+    min_depth: isize,
+    max_depth: isize,
+    table_hits: isize,
+    table_misses: isize,
+    root_progress: isize,
+    root_number: isize,
+    root_count: isize,
+}
+
+type TranspositionTable = HashMap<Position, AlphaBetaResult>;
+
+pub fn alpha_beta<B: TreeComputeBudget, F: Fn(Position) -> isize>(
     clock: &FischerClock,
     pos: Position,
     budget: B,
     eval: &F,
+) -> AlphaBetaResult {
+    alpha_beta_iter(
+        clock,
+        pos,
+        budget,
+        eval,
+        &mut HashMap::new(),
+        &mut AlphaBetaStats {
+            last_print: Instant::now(),
+            min_depth: 1000,
+            max_depth: 0,
+            table_hits: 0,
+            table_misses: 0,
+            root_progress: 0,
+            root_number: 0,
+            root_count: 0,
+        },
+        0,
+        isize::MIN,
+        isize::MAX,
+    )
+}
+
+fn alpha_beta_iter<B: TreeComputeBudget, F: Fn(Position) -> isize>(
+    clock: &FischerClock,
+    pos: Position,
+    budget: B,
+    eval: &F,
+    table: &mut TranspositionTable,
     stats: &mut AlphaBetaStats,
-    depth: i64,
-    mut alpha: i64,
-    mut beta: i64,
+    depth: isize,
+    alpha: isize,
+    beta: isize,
+) -> AlphaBetaResult {
+    if let Some(res) = table.get(&pos) {
+        stats.table_hits += 1;
+        *res
+    } else {
+        stats.table_misses += 1;
+        let res = alpha_beta_heavy_iter(
+            clock,
+            pos.clone(),
+            budget,
+            eval,
+            table,
+            stats,
+            depth,
+            alpha,
+            beta,
+        );
+        table.insert(pos, res);
+        res
+    }
+}
+
+fn alpha_beta_heavy_iter<B: TreeComputeBudget, F: Fn(Position) -> isize>(
+    clock: &FischerClock,
+    pos: Position,
+    budget: B,
+    eval: &F,
+    table: &mut TranspositionTable,
+    stats: &mut AlphaBetaStats,
+    depth: isize,
+    mut alpha: isize,
+    mut beta: isize,
 ) -> AlphaBetaResult {
     if let Some(winner) = pos.winner() {
         return AlphaBetaResult::Terminal(winner);
@@ -1225,51 +1394,49 @@ fn alpha_beta_iter<B: TreeComputeBudget, F: Fn(Position) -> i64>(
 
     let moves = {
         let mut moves = pos.moves();
-        if depth < 3 {
-            moves.shuffle(&mut thread_rng());
-        }
+        moves.shuffle(&mut thread_rng());
         moves
     };
     let move_count = moves.len();
 
     if depth == 0 {
-        stats.root_count = move_count as i64;
+        stats.root_count = move_count as isize;
         stats.root_progress = 0;
     }
 
     let maximizing = pos.to_move == Color::White;
 
     let mut favorite_child =
-        AlphaBetaResult::DepthLimit(if maximizing { i64::MIN } else { i64::MAX });
+        AlphaBetaResult::DepthLimit(if maximizing { isize::MIN } else { isize::MAX });
     for (i, m) in moves.into_iter().enumerate() {
         if depth == 0 {
-            stats.root_progress = i as i64 + 1;
+            stats.root_progress = i as isize + 1;
             stats.root_number = if maximizing { alpha } else { beta };
         }
 
-        if depth < 2 {
-            let now = Instant::now();
-            if (now - stats.last_print).as_secs_f64() > 0.1 {
-                print!(
-                    "\x1b[G\x1b[K{} d={:2}..{:2} ({}/{}) [x={}]",
-                    clock,
-                    stats.min_depth,
-                    stats.max_depth,
-                    stats.root_progress,
-                    stats.root_count,
-                    if stats.root_number == i64::MIN {
-                        format!("-inf")
-                    } else if stats.root_number == i64::MAX {
-                        format!("inf")
-                    } else {
-                        format!("{}", stats.root_number)
-                    }
-                );
-                std::io::stdout().lock().flush().unwrap();
-                stats.last_print = now;
-                stats.min_depth = 1000;
-                stats.max_depth = 0;
-            }
+        let now = Instant::now();
+        if (now - stats.last_print).as_secs_f64() > 0.1 {
+            print!(
+                "\x1b[G\x1b[K{} d={:2}..{:2} ({}/{}) [x={}] T={:.1}%/10e{:.1}",
+                clock,
+                stats.min_depth,
+                stats.max_depth,
+                stats.root_progress,
+                stats.root_count,
+                if stats.root_number == isize::MIN {
+                    format!("-inf")
+                } else if stats.root_number == isize::MAX {
+                    format!("inf")
+                } else {
+                    format!("{}", stats.root_number)
+                },
+                100. * stats.table_hits as f64 / (stats.table_misses + stats.table_hits) as f64,
+                (stats.table_misses as f64).log10(),
+            );
+            std::io::stdout().lock().flush().unwrap();
+            stats.last_print = now;
+            stats.min_depth = 1000;
+            stats.max_depth = 0;
         }
 
         let mut next_pos = pos.clone();
@@ -1281,6 +1448,7 @@ fn alpha_beta_iter<B: TreeComputeBudget, F: Fn(Position) -> i64>(
                 next_pos,
                 child_budget,
                 eval,
+                table,
                 stats,
                 depth + 1,
                 alpha,
