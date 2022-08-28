@@ -296,7 +296,7 @@ impl<P: MctsPolicy + Debug> GamePlayer for MctsPlayer<P> {
                 .max(clock.my_remaining() * 0.2)
                 .min(clock.my_remaining() * 0.9),
         );
-        let top_thresh = (turn_duration.as_secs_f64() * 1200.) as i64;
+        //let top_thresh = (turn_duration.as_secs_f64() * 1200.) as i64;
 
         let arena = typed_arena::Arena::new();
         let mut t = board::MctsTree::new(pos.clone(), &arena);
@@ -321,9 +321,9 @@ impl<P: MctsPolicy + Debug> GamePlayer for MctsPlayer<P> {
                 );
                 stdout().lock().flush().unwrap();
                 last_printed = Instant::now();
-                if m_stats.visits > top_thresh {
-                    break;
-                }
+                //if m_stats.visits > top_thresh {
+                //    break;
+                //}
             }
         }
 
@@ -351,24 +351,123 @@ impl Display for RandomPlayer {
     }
 }
 
-struct AlphaBetaPlayer;
+struct TimeLimitedAlphaBetaPlayerEvalMaterial;
 
-impl GamePlayer for AlphaBetaPlayer {
+impl GamePlayer for TimeLimitedAlphaBetaPlayerEvalMaterial {
     fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
         let turn_duration = Duration::from_secs_f64(
             (clock.incr * 0.9)
                 .max(clock.my_remaining() * 0.2)
                 .min(clock.my_remaining() * 0.9),
         );
-        alpha_beta(&clock, turn_duration, pos.clone(), &board::eval_material)
-            .get_move()
-            .unwrap()
+        alpha_beta(
+            &clock,
+            pos.clone(),
+            board::TreeTimeLimit::from(turn_duration),
+            &board::eval_material,
+        )
+        .get_move()
+        .unwrap()
     }
 }
 
-impl Display for AlphaBetaPlayer {
+impl Display for TimeLimitedAlphaBetaPlayerEvalMaterial {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "alpha-beta()")
+        write!(f, "alpha-beta(eval_material)")
+    }
+}
+
+struct TimeLimitedV1AlphaBetaPlayerEvalMaterial;
+
+impl GamePlayer for TimeLimitedV1AlphaBetaPlayerEvalMaterial {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+        let turn_duration = Duration::from_secs_f64(
+            (clock.incr * 0.9)
+                .max(clock.my_remaining() * 0.2)
+                .min(clock.my_remaining() * 0.9),
+        );
+        alpha_beta(
+            &clock,
+            pos.clone(),
+            board::TreeTimeLimitV1::from(turn_duration),
+            &board::eval_material,
+        )
+        .get_move()
+        .unwrap()
+    }
+}
+
+impl Display for TimeLimitedV1AlphaBetaPlayerEvalMaterial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "alpha-beta(eval_material, v1)")
+    }
+}
+
+struct TimeLimitedAlphaBetaPlayerEvalLaser;
+
+impl GamePlayer for TimeLimitedAlphaBetaPlayerEvalLaser {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+        let turn_duration = Duration::from_secs_f64(
+            (clock.incr * 0.9)
+                .max(clock.my_remaining() * 0.2)
+                .min(clock.my_remaining() * 0.9),
+        );
+        alpha_beta(
+            &clock,
+            pos.clone(),
+            board::TreeTimeLimit::from(turn_duration),
+            &board::eval_laser,
+        )
+        .get_move()
+        .unwrap()
+    }
+}
+
+impl Display for TimeLimitedAlphaBetaPlayerEvalLaser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "alpha-beta(eval_laser)")
+    }
+}
+
+struct DepthLimitedAlphaBetaPlayerEvalMaterial(usize);
+
+impl GamePlayer for DepthLimitedAlphaBetaPlayerEvalMaterial {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+        alpha_beta(
+            &clock,
+            pos.clone(),
+            board::TreeDepthLimit::new(self.0),
+            &board::eval_material,
+        )
+        .get_move()
+        .unwrap()
+    }
+}
+
+impl Display for DepthLimitedAlphaBetaPlayerEvalMaterial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "alpha-beta(eval_material, D={})", self.0)
+    }
+}
+
+struct DepthLimitedAlphaBetaPlayerEvalLaser(usize);
+
+impl GamePlayer for DepthLimitedAlphaBetaPlayerEvalLaser {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+        alpha_beta(
+            &clock,
+            pos.clone(),
+            board::TreeDepthLimit::new(self.0),
+            &board::eval_laser,
+        )
+        .get_move()
+        .unwrap()
+    }
+}
+
+impl Display for DepthLimitedAlphaBetaPlayerEvalLaser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "alpha-beta(eval_laser, D={})", self.0)
     }
 }
 
@@ -531,12 +630,19 @@ impl League {
 fn main() {
     env_logger::init();
 
-    let mut league = League::new(60., 1., 60.);
+    let mut league = League::new(5., 5., 5.);
 
-    league.add_player(AlphaBetaPlayer);
-    league.add_player(MctsPlayer::new(board::BackupRollout::new(1.0)));
-    league.add_player(MctsPlayer::new(board::UniformRollout::new(1.0)));
-    league.add_player(MctsPlayer::new(board::CoinTossRollout));
+    //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(2));
+    //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(3));
+    //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(4));
+    //league.add_player(DepthLimitedAlphaBetaPlayerEvalLaser(2));
+    league.add_player(TimeLimitedAlphaBetaPlayerEvalMaterial);
+    league.add_player(TimeLimitedV1AlphaBetaPlayerEvalMaterial);
+    //league.add_player(TimeLimitedAlphaBetaPlayerEvalLaser);
+    //league.add_player(MctsPlayer::new(board::BacktrackRollout::new(1.0)));
+    //league.add_player(MctsPlayer::new(board::BacktrackRollout::new(1.4)));
+    //league.add_player(MctsPlayer::new(board::UniformRollout::new(1.0)));
+    //league.add_player(MctsPlayer::new(board::CoinTossRollout));
 
     loop {
         match league.add_game() {

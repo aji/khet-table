@@ -387,6 +387,8 @@ impl FromIterator<u8> for Board {
 pub struct Position {
     to_move: Color,
     board: Board,
+    has_white: bool,
+    has_red: bool,
 }
 
 impl Position {
@@ -421,6 +423,8 @@ impl Position {
         Position {
             to_move: Color::White,
             board: data.iter().copied().collect(),
+            has_white: true,
+            has_red: true,
         }
     }
 
@@ -511,11 +515,12 @@ impl Position {
     }
 
     pub fn winner(&self) -> Option<Color> {
-        match self.board.winner() {
-            0 => None,
-            CC_RED => Some(Color::Red),
-            CC_WHITE => Some(Color::White),
-            _ => panic!(),
+        if !self.has_red {
+            Some(Color::White)
+        } else if !self.has_white {
+            Some(Color::Red)
+        } else {
+            None
         }
     }
 
@@ -523,6 +528,13 @@ impl Position {
         self.board.apply_move(m);
         let taken = self.board.apply_laser_rule(self.to_move.to_cell());
         self.to_move = self.to_move.opp();
+        if taken & CR_MASK == CR_PHARAOH {
+            match taken & CC_MASK {
+                CC_WHITE => self.has_white = false,
+                CC_RED => self.has_red = false,
+                _ => panic!(),
+            }
+        }
         Cell(taken)
     }
 
@@ -730,17 +742,17 @@ impl fmt::Debug for UniformRollout {
     }
 }
 
-pub struct BackupRollout {
+pub struct BacktrackRollout {
     coeff: f64,
 }
 
-impl BackupRollout {
-    pub fn new(coeff: f64) -> BackupRollout {
-        BackupRollout { coeff }
+impl BacktrackRollout {
+    pub fn new(coeff: f64) -> BacktrackRollout {
+        BacktrackRollout { coeff }
     }
 }
 
-impl MctsPolicy for BackupRollout {
+impl MctsPolicy for BacktrackRollout {
     fn coeff(&self) -> f64 {
         self.coeff
     }
@@ -780,9 +792,9 @@ impl MctsPolicy for BackupRollout {
     }
 }
 
-impl fmt::Debug for BackupRollout {
+impl fmt::Debug for BacktrackRollout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Backup{{c={:.1}}}", self.coeff)
+        write!(f, "Backtrack{{c={:.2}}}", self.coeff)
     }
 }
 
@@ -907,10 +919,8 @@ impl Ord for AlphaBetaResult {
 
 struct AlphaBetaStats {
     last_print: Instant,
+    min_depth: i64,
     max_depth: i64,
-    this_depth_min: i64,
-    this_depth: i64,
-    root_dur: f64,
     root_progress: i64,
     root_number: i64,
     root_count: i64,
@@ -919,27 +929,25 @@ struct AlphaBetaStats {
 /// Chooses a move using alpha-beta tree search and the given evaluation
 /// heuristic. If the given position is non-terminal and the depth limit is
 /// greater than 0, this function will always return AlphaBeta::Move.
-pub fn alpha_beta<F: Fn(Position) -> i64>(
+pub fn alpha_beta<B: TreeComputeBudget, F: Fn(Position) -> i64>(
     clock: &FischerClock,
-    dur: Duration,
     pos: Position,
+    budget: B,
     eval: &F,
 ) -> AlphaBetaResult {
     alpha_beta_iter(
         clock,
+        pos,
+        budget,
+        eval,
         &mut AlphaBetaStats {
             last_print: Instant::now(),
+            min_depth: 1000,
             max_depth: 0,
-            this_depth_min: 100,
-            this_depth: 0,
-            root_dur: 0.0,
             root_progress: 0,
             root_number: 0,
             root_count: 0,
         },
-        dur,
-        pos,
-        eval,
         0,
         i64::MIN,
         i64::MAX,
@@ -952,6 +960,13 @@ pub fn distance_to(r0: u8, c0: u8, r1: u8, c1: u8) -> u8 {
 
 pub fn eval_material(pos: Position) -> i64 {
     let mut value: i64 = 0;
+
+    if let Some(winner) = pos.winner() {
+        return match winner {
+            Color::White => 1000,
+            Color::Red => -1000,
+        };
+    }
 
     for row in 0..8 {
         for col in 0..10 {
@@ -995,12 +1010,211 @@ pub fn eval_material(pos: Position) -> i64 {
     value + white_mobility - red_mobility
 }
 
-fn alpha_beta_iter<F: Fn(Position) -> i64>(
+pub fn eval_laser(pos: Position) -> i64 {
+    let mut value: i64 = 0;
+
+    if let Some(winner) = pos.winner() {
+        return match winner {
+            Color::White => 1000,
+            Color::Red => -1000,
+        };
+    }
+
+    for row in 0..8 {
+        for col in 0..10 {
+            let distance = distance_to(3, 4, row, col)
+                .min(distance_to(4, 4, row, col))
+                .min(distance_to(3, 5, row, col))
+                .min(distance_to(4, 5, row, col)) as i64;
+            if let Some(piece) = Piece::decode(pos.get(row, col)) {
+                let piece_value: i64 = match piece.role {
+                    Role::Pyramid => {
+                        let edge_pyramid = (col == 0 && piece.dir == Direction::North)
+                            || (col == 9 && piece.dir == Direction::South);
+                        if edge_pyramid {
+                            20
+                        } else {
+                            20 - distance
+                        }
+                    }
+                    Role::Scarab => 10 - distance,
+                    Role::Anubis => 30,
+                    Role::Sphinx => 0,
+                    Role::Pharaoh => 0,
+                };
+                if piece.color == Color::White {
+                    value += piece_value;
+                } else {
+                    value -= piece_value;
+                }
+            }
+        }
+    }
+
+    for pt in pos.board.laser_path(CC_WHITE).iter() {
+        for dr in -1..=1 {
+            for dc in -1..=1 {
+                let r = pt.r + dr;
+                let c = pt.c + dc;
+                if in_bounds(r, c) {
+                    if let Some(piece) = Piece::decode(pos.get(r as u8, c as u8)) {
+                        if piece.role == Role::Pyramid || piece.role == Role::Scarab {
+                            value += if piece.color == Color::White { 2 } else { -1 };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for pt in pos.board.laser_path(CC_RED).iter() {
+        for dr in -1..=1 {
+            for dc in -1..=1 {
+                let r = pt.r + dr;
+                let c = pt.c + dc;
+                if in_bounds(r, c) {
+                    if let Some(piece) = Piece::decode(pos.get(r as u8, c as u8)) {
+                        if piece.role == Role::Pyramid || piece.role == Role::Scarab {
+                            value += if piece.color == Color::White { 1 } else { -2 };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut white_moves = Vec::with_capacity(100);
+    let mut red_moves = Vec::with_capacity(100);
+    pos.board.add_moves_for_color(CC_WHITE, &mut white_moves);
+    pos.board.add_moves_for_color(CC_RED, &mut red_moves);
+
+    let white_mobility = white_moves.len() as i64 / 10;
+    let red_mobility = red_moves.len() as i64 / 10;
+
+    value + white_mobility - red_mobility
+}
+
+pub trait TreeComputeBudget: Sized {
+    fn descend(&self, child_index: usize, num_children: usize) -> Option<Self>;
+}
+
+pub struct TreeDepthLimit(usize);
+
+impl TreeDepthLimit {
+    pub fn new(depth: usize) -> TreeDepthLimit {
+        TreeDepthLimit(depth)
+    }
+}
+
+impl TreeComputeBudget for TreeDepthLimit {
+    fn descend(&self, _: usize, _: usize) -> Option<Self> {
+        match self.0 {
+            0 => None,
+            1 => None,
+            i => Some(TreeDepthLimit(i - 1)),
+        }
+    }
+}
+
+pub struct TreeTimeLimitV1 {
+    soft_end: Instant,
+    hard_end: Instant,
+}
+
+impl TreeTimeLimitV1 {
+    fn new(now: Instant, dur: Duration) -> TreeTimeLimitV1 {
+        let hard_end = now + dur;
+        let soft_end = (now + dur.mul_f64(0.5) + Duration::from_millis(1)).min(hard_end);
+        TreeTimeLimitV1 { soft_end, hard_end }
+    }
+}
+
+impl From<Duration> for TreeTimeLimitV1 {
+    fn from(dur: Duration) -> Self {
+        TreeTimeLimitV1::new(Instant::now(), dur)
+    }
+}
+
+impl TreeComputeBudget for TreeTimeLimitV1 {
+    fn descend(&self, child_index: usize, num_children: usize) -> Option<Self> {
+        let now = Instant::now();
+        if now < self.hard_end {
+            let remaining = num_children - child_index;
+            let child_dur = if now < self.soft_end {
+                (self.hard_end - now).div_f64(remaining as f64).mul_f64(4.0)
+            } else {
+                (self.hard_end - now).div_f64(remaining as f64)
+            };
+            Some(TreeTimeLimitV1::new(now, child_dur))
+        } else {
+            None
+        }
+    }
+}
+
+pub enum TreeTimeLimit {
+    Time(Instant, Instant),
+    Depth(isize),
+}
+
+const LIMIT_DEPTH_2: Duration = Duration::from_micros(600);
+const LIMIT_DEPTH_3: Duration = Duration::from_micros(30_000);
+const LIMIT_DEPTH_4: Duration = Duration::from_micros(1_500_000);
+
+impl TreeTimeLimit {
+    fn new(now: Instant, dur: Duration) -> TreeTimeLimit {
+        if dur < LIMIT_DEPTH_2 {
+            TreeTimeLimit::Depth(2)
+        } else if dur < LIMIT_DEPTH_3 {
+            TreeTimeLimit::Depth(3)
+        } else if dur < LIMIT_DEPTH_4 {
+            TreeTimeLimit::Depth(4)
+        } else {
+            let hard_end = now + dur;
+            let soft_end = (now + dur.mul_f64(0.5) + Duration::from_millis(1)).min(hard_end);
+            TreeTimeLimit::Time(soft_end, hard_end)
+        }
+    }
+}
+
+impl From<Duration> for TreeTimeLimit {
+    fn from(dur: Duration) -> Self {
+        TreeTimeLimit::new(Instant::now(), dur)
+    }
+}
+
+impl TreeComputeBudget for TreeTimeLimit {
+    fn descend(&self, child_index: usize, num_children: usize) -> Option<Self> {
+        match *self {
+            TreeTimeLimit::Time(soft_end, hard_end) => {
+                let now = Instant::now();
+                if now < hard_end {
+                    let remaining = num_children - child_index;
+                    let child_dur = if now < soft_end {
+                        (hard_end - now).div_f64(remaining as f64).mul_f64(4.0)
+                    } else {
+                        (hard_end - now).div_f64(remaining as f64)
+                    };
+                    Some(TreeTimeLimit::new(now, child_dur))
+                } else {
+                    None
+                }
+            }
+            TreeTimeLimit::Depth(d) => match d {
+                0 => None,
+                1 => None,
+                i => Some(TreeTimeLimit::Depth(i - 1)),
+            },
+        }
+    }
+}
+
+fn alpha_beta_iter<B: TreeComputeBudget, F: Fn(Position) -> i64>(
     clock: &FischerClock,
-    stats: &mut AlphaBetaStats,
-    dur: Duration,
     pos: Position,
+    budget: B,
     eval: &F,
+    stats: &mut AlphaBetaStats,
     depth: i64,
     mut alpha: i64,
     mut beta: i64,
@@ -1008,28 +1222,20 @@ fn alpha_beta_iter<F: Fn(Position) -> i64>(
     if let Some(winner) = pos.winner() {
         return AlphaBetaResult::Terminal(winner);
     }
-    if dur.is_zero() {
-        return AlphaBetaResult::DepthLimit(eval(pos));
-    }
 
     let moves = {
         let mut moves = pos.moves();
-        moves.shuffle(&mut thread_rng());
+        if depth < 3 {
+            moves.shuffle(&mut thread_rng());
+        }
         moves
     };
-
     let move_count = moves.len();
-    let turn_start = Instant::now();
-    let turn_end = turn_start + dur;
 
     if depth == 0 {
-        stats.root_dur = dur.as_secs_f64();
         stats.root_count = move_count as i64;
         stats.root_progress = 0;
     }
-    stats.max_depth = depth.max(stats.max_depth);
-    stats.this_depth_min = depth.min(stats.this_depth_min);
-    stats.this_depth = depth.max(stats.this_depth);
 
     let maximizing = pos.to_move == Color::White;
 
@@ -1037,50 +1243,54 @@ fn alpha_beta_iter<F: Fn(Position) -> i64>(
         AlphaBetaResult::DepthLimit(if maximizing { i64::MIN } else { i64::MAX });
     for (i, m) in moves.into_iter().enumerate() {
         if depth == 0 {
-            stats.root_progress = i as i64;
+            stats.root_progress = i as i64 + 1;
             stats.root_number = if maximizing { alpha } else { beta };
         }
 
-        let now = Instant::now();
-        if (now - stats.last_print).as_secs_f64() > 0.1 {
-            print!(
-                "\x1b[G\x1b[K{} d={:2}..{:2} max={:2} ({}/{}) [x={}] {:.1}s",
-                clock,
-                stats.this_depth_min,
-                stats.this_depth,
-                stats.max_depth,
-                stats.root_progress,
-                stats.root_count,
-                stats.root_number,
-                stats.root_dur
-            );
-            std::io::stdout().lock().flush().unwrap();
-            stats.this_depth_min = 100;
-            stats.this_depth = 0;
-            stats.last_print = now;
-        }
-
-        let child_dur = if turn_end <= now {
-            if depth != 0 {
-                return AlphaBetaResult::DepthLimit(eval(pos));
+        if depth < 2 {
+            let now = Instant::now();
+            if (now - stats.last_print).as_secs_f64() > 0.1 {
+                print!(
+                    "\x1b[G\x1b[K{} d={:2}..{:2} ({}/{}) [x={}]",
+                    clock,
+                    stats.min_depth,
+                    stats.max_depth,
+                    stats.root_progress,
+                    stats.root_count,
+                    if stats.root_number == i64::MIN {
+                        format!("-inf")
+                    } else if stats.root_number == i64::MAX {
+                        format!("inf")
+                    } else {
+                        format!("{}", stats.root_number)
+                    }
+                );
+                std::io::stdout().lock().flush().unwrap();
+                stats.last_print = now;
+                stats.min_depth = 1000;
+                stats.max_depth = 0;
             }
-            dur.div_f64(move_count as f64 / 8.0)
-        } else {
-            (turn_end - now).div_f64((move_count - i) as f64 / 4.0)
-        };
+        }
 
         let mut next_pos = pos.clone();
         next_pos.apply_move(m);
-        let child = alpha_beta_iter(
-            clock,
-            stats,
-            child_dur,
-            next_pos,
-            eval,
-            depth + 1,
-            alpha,
-            beta,
-        )
+
+        let child = if let Some(child_budget) = budget.descend(i, move_count) {
+            alpha_beta_iter(
+                clock,
+                next_pos,
+                child_budget,
+                eval,
+                stats,
+                depth + 1,
+                alpha,
+                beta,
+            )
+        } else {
+            stats.max_depth = (depth + 1).max(stats.max_depth);
+            stats.min_depth = (depth + 1).min(stats.min_depth);
+            AlphaBetaResult::DepthLimit(eval(next_pos))
+        }
         .parent(m);
 
         if maximizing {
