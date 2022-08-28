@@ -251,11 +251,13 @@ impl Board {
         self.add_motion_move_for_piece(src, r, c, sx, 1, -1, moves);
         self.add_motion_move_for_piece(src, r, c, sx, 1, 0, moves);
         self.add_motion_move_for_piece(src, r, c, sx, 1, 1, moves);
-        moves.push(Move {
-            sx,
-            dx: sx,
-            ddir: 1,
-        });
+        if (src & CR_MASK) != CR_PHARAOH {
+            moves.push(Move {
+                sx,
+                dx: sx,
+                ddir: 1,
+            });
+        }
         if (src & CR_MASK) == CR_PYRAMID {
             moves.push(Move {
                 sx,
@@ -730,7 +732,9 @@ impl<'a> MctsNode<'a> {
         } else {
             let node = arena.alloc(MctsNode::new(pos));
             let winner = policy.rollout(pos);
-            node.visits = 1;
+            if !policy.include_bug() {
+                node.visits = 1;
+            }
             if winner == to_move {
                 node.wins = 1;
             }
@@ -774,6 +778,10 @@ pub struct MctsMoveStats {
 pub trait MctsPolicy {
     fn coeff(&self) -> f64;
     fn rollout(&self, pos: Position) -> Color;
+
+    fn include_bug(&self) -> bool {
+        false
+    }
 }
 
 impl<'a> MctsTree<'a> {
@@ -869,11 +877,22 @@ impl fmt::Debug for UniformRollout {
 
 pub struct BacktrackRollout {
     coeff: f64,
+    include_bug: bool,
 }
 
 impl BacktrackRollout {
     pub fn new(coeff: f64) -> BacktrackRollout {
-        BacktrackRollout { coeff }
+        BacktrackRollout {
+            coeff,
+            include_bug: false,
+        }
+    }
+
+    pub fn bugged(coeff: f64) -> BacktrackRollout {
+        BacktrackRollout {
+            coeff,
+            include_bug: true,
+        }
     }
 }
 
@@ -915,11 +934,20 @@ impl MctsPolicy for BacktrackRollout {
             }
         }
     }
+
+    fn include_bug(&self) -> bool {
+        self.include_bug
+    }
 }
 
 impl fmt::Debug for BacktrackRollout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Backtrack{{c={:.2}}}", self.coeff)
+        write!(
+            f,
+            "Backtrack{{c={:.2}{}}}",
+            self.coeff,
+            if self.include_bug { ", bugged" } else { "" }
+        )
     }
 }
 

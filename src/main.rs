@@ -14,7 +14,7 @@ extern crate typed_arena;
 extern crate winit;
 
 use std::{
-    fmt::{Debug, Display},
+    fmt::{self, Debug, Display},
     io::{stdout, Write},
     thread,
     time::{Duration, Instant},
@@ -839,7 +839,145 @@ impl League {
     }
 }
 
+struct Comparator<P1, P2> {
+    p1: Box<dyn Fn() -> P1>,
+    p2: Box<dyn Fn() -> P2>,
+    p1p2: CompareResults,
+    p2p1: CompareResults,
+    clock_main: f64,
+    clock_incr: f64,
+    clock_limit: f64,
+}
+
+#[derive(Copy, Clone)]
+struct CompareResults {
+    win: usize,
+    draw: usize,
+    lose: usize,
+}
+
+impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
+    fn new<F1: Fn() -> P1 + 'static, F2: Fn() -> P2 + 'static>(
+        p1: F1,
+        p2: F2,
+        clock_main: f64,
+        clock_incr: f64,
+        clock_limit: f64,
+    ) -> Comparator<P1, P2> {
+        Comparator {
+            p1: Box::new(p1),
+            p2: Box::new(p2),
+            p1p2: CompareResults::new(),
+            p2p1: CompareResults::new(),
+            clock_main,
+            clock_incr,
+            clock_limit,
+        }
+    }
+
+    fn one_iter(&mut self) {
+        self.p1p2.record({
+            let mut p1 = (self.p1)();
+            let mut p2 = (self.p2)();
+            let header = self.format_header(&p1, &p2);
+
+            run_game(
+                header.as_str(),
+                board::Position::new_classic(),
+                &mut p1,
+                &mut p2,
+                self.clock_main,
+                self.clock_incr,
+                self.clock_limit,
+            )
+        });
+
+        self.p2p1.record({
+            let mut p1 = (self.p1)();
+            let mut p2 = (self.p2)();
+            let header = self.format_header(&p1, &p2);
+
+            run_game(
+                header.as_str(),
+                board::Position::new_classic(),
+                &mut p2,
+                &mut p1,
+                self.clock_main,
+                self.clock_incr,
+                self.clock_limit,
+            )
+        });
+    }
+
+    fn format_header(&self, p1: &P1, p2: &P2) -> String {
+        let total = CompareResults {
+            win: self.p1p2.win + self.p2p1.lose,
+            draw: self.p1p2.draw + self.p2p1.draw,
+            lose: self.p1p2.lose + self.p2p1.win,
+        };
+
+        let expect = (total.win as f64 + 0.5 * total.draw as f64)
+            / (total.win + total.draw + total.lose) as f64;
+        let elo = -400.0 * (1.0 / expect - 1.0).log10();
+
+        format!(
+            "  P1 {}\n  P2 {}\n    P1 (W) {} (R) P2\n    P2 (W) {} (R) P1\n  TOTAL P1 {} P2\n  P1 rel. Elo: {:.0}",
+            p1, p2, self.p1p2, self.p2p1, total, elo
+        )
+    }
+}
+
+impl CompareResults {
+    fn new() -> CompareResults {
+        CompareResults {
+            win: 0,
+            draw: 0,
+            lose: 0,
+        }
+    }
+
+    fn record(&mut self, res: GameResult) {
+        match res {
+            GameResult::Draw => self.draw += 1,
+            GameResult::WhiteWins => self.win += 1,
+            GameResult::RedWins => self.lose += 1,
+        }
+    }
+}
+
+impl fmt::Display for CompareResults {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:2}/{:2}/{:2}", self.win, self.draw, self.lose)
+    }
+}
+
 fn main() {
+    env_logger::init();
+
+    /*
+    let mut compare = Comparator::new(
+        || MctsPlayer::new(board::BacktrackRollout::new(1.0)),
+        || MctsPlayer::new(board::BacktrackRollout::bugged(1.0)),
+        60.,
+        60.,
+        60.,
+    );
+    */
+    let mut compare = Comparator::new(
+        || DepthLimitedAlphaBetaPlayerEvalMaterial(3),
+        || DepthLimitedAlphaBetaPlayerEvalMaterial(4),
+        60.,
+        60.,
+        60.,
+    );
+
+    loop {
+        compare.one_iter();
+    }
+}
+
+#[allow(unused)]
+fn play_main() {
     env_logger::init();
 
     let res = run_game(
@@ -866,7 +1004,7 @@ fn main() {
 fn league_main() {
     env_logger::init();
 
-    let mut league = League::new(3600., 3600., 3600.);
+    let mut league = League::new(60., 60., 60.);
 
     //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(2));
     //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(3));
@@ -877,12 +1015,8 @@ fn league_main() {
     //league.add_player(TimeLimitedAlphaBetaPlayerEvalMaterial);
     //league.add_player(TimeLimitedV1AlphaBetaPlayerEvalMaterial);
     //league.add_player(TimeLimitedAlphaBetaPlayerEvalLaser);
-    //league.add_player(MctsPlayer::new(board::BacktrackRollout::new(1.0)));
-    league.add_player(TimeLimitedMctsPlayer::new(
-        Duration::from_secs_f64(60.),
-        board::BacktrackRollout::new(1.4),
-    ));
-    //league.add_player(MctsPlayer::new(board::BacktrackRollout::new(1.4)));
+    league.add_player(MctsPlayer::new(board::BacktrackRollout::new(1.0)));
+    league.add_player(MctsPlayer::new(board::BacktrackRollout::bugged(1.0)));
     //league.add_player(MctsPlayer::new(board::UniformRollout::new(1.0)));
     //league.add_player(MctsPlayer::new(board::CoinTossRollout));
 
