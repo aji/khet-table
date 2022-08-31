@@ -1,4 +1,5 @@
 #![feature(test)]
+#![feature(unchecked_math)]
 
 #[macro_use]
 extern crate log;
@@ -23,6 +24,7 @@ use std::{
 use board::{alpha_beta, MctsPolicy};
 use rand::seq::SliceRandom;
 
+pub mod bb;
 pub mod board;
 pub mod render;
 
@@ -324,7 +326,7 @@ impl<P: MctsPolicy + Debug> GamePlayer for MctsPlayer<P> {
         let mut last_printed = Instant::now();
 
         while clock.turn_start.elapsed() < turn_duration {
-            for _ in 0..497 {
+            for _ in 0..97 {
                 t.add_rollout(&self.policy);
             }
             if print_ival < last_printed.elapsed() {
@@ -380,7 +382,7 @@ impl<P: MctsPolicy + Debug> GamePlayer for TimeLimitedMctsPlayer<P> {
         let mut last_printed = Instant::now();
 
         while clock.turn_start.elapsed() < turn_duration {
-            for _ in 0..497 {
+            for _ in 0..97 {
                 t.add_rollout(&self.policy);
             }
             if print_ival < last_printed.elapsed() {
@@ -958,17 +960,17 @@ fn main() {
     let mut compare = Comparator::new(
         || MctsPlayer::new(board::BacktrackRollout::new(1.0)),
         || MctsPlayer::new(board::BacktrackRollout::bugged(1.0)),
-        60.,
-        60.,
-        60.,
+        1.5,
+        1.5,
+        1.5,
     );
     */
     let mut compare = Comparator::new(
-        || DepthLimitedAlphaBetaPlayerEvalMaterial(3),
-        || DepthLimitedAlphaBetaPlayerEvalMaterial(4),
-        60.,
-        60.,
-        60.,
+        || TimeLimitedAlphaBetaPlayerEvalMaterial,
+        || MctsPlayer::new(board::BacktrackRollout::new(1.0)),
+        30.0,
+        30.0,
+        30.0,
     );
 
     loop {

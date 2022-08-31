@@ -1511,18 +1511,18 @@ fn alpha_beta_heavy_iter<B: TreeComputeBudget, F: Fn(Position) -> isize>(
     favorite_child
 }
 
-/*
 #[cfg(test)]
 mod tests {
-    use super::{MctsTree, Position};
+    use super::Position;
     use test::Bencher;
 
     #[bench]
-    fn bench_mcts(b: &mut Bencher) {
-        let mut tree = MctsTree::new(Position::new_classic());
+    fn bench_movegen(b: &mut Bencher) {
+        let mut moves = Vec::with_capacity(80);
+        let pos = Position::new_classic();
         b.iter(|| {
-            tree.add_rollout();
+            moves.truncate(0);
+            pos.add_moves(&mut moves);
         });
     }
 }
-*/
