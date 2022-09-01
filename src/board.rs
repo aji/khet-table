@@ -1514,7 +1514,7 @@ fn alpha_beta_heavy_iter<B: TreeComputeBudget, F: Fn(Position) -> isize>(
 #[cfg(test)]
 mod tests {
     use super::Position;
-    use test::Bencher;
+    use test::{black_box, Bencher};
 
     #[bench]
     fn bench_movegen(b: &mut Bencher) {
@@ -1523,6 +1523,14 @@ mod tests {
         b.iter(|| {
             moves.truncate(0);
             pos.add_moves(&mut moves);
+        });
+    }
+
+    #[bench]
+    fn bench_laser_rule(b: &mut Bencher) {
+        let mut pos = Position::new_classic();
+        b.iter(|| {
+            black_box(pos.board.apply_laser_rule(super::CC_WHITE));
         });
     }
 }

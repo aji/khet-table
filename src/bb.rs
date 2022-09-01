@@ -1,5 +1,10 @@
 use std::fmt;
 
+macro_rules! bb_dbg {
+    () => {};
+    ($($arg:tt)*) => {};
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Board {
     w: u128,
@@ -49,7 +54,11 @@ const MASK_W_OK: u128 = !MASK_R_ONLY & !MASK_W_SPHINX & MASK_BOARD;
 const MASK_R_OK: u128 = !MASK_W_ONLY & !MASK_R_SPHINX & MASK_BOARD;
 
 const MASK_TO_MOVE: u128 = 0x_1000_0000_0000_0000_0000_0000_0000_0000;
-const SHR_TO_MOVE: usize = 0x7c;
+
+const DIR_N: usize = 0;
+const DIR_E: usize = 1;
+const DIR_S: usize = 2;
+const DIR_W: usize = 3;
 
 impl Board {
     pub fn new_classic() -> Board {
@@ -78,16 +87,19 @@ impl Board {
     }
 
     #[inline]
-    pub fn movegen(self) -> MoveSet {
+    pub fn movegen(&self) -> MoveSet {
         // pieces owned by the player who will move next
-        let to_move = unsafe {
-            (MASK_W_SPHINX | self.w).unchecked_mul((self.w & MASK_TO_MOVE) >> SHR_TO_MOVE)
-                | (MASK_R_SPHINX | self.r).unchecked_mul((self.r & MASK_TO_MOVE) >> SHR_TO_MOVE)
+        let to_move = if self.w & MASK_TO_MOVE != 0 {
+            MASK_W_SPHINX | self.w
+        } else {
+            MASK_R_SPHINX | self.r
         };
+
         // squares that the player's pieces are allowed to occupy
-        let ok = unsafe {
-            MASK_W_OK.unchecked_mul((self.w & MASK_TO_MOVE) >> SHR_TO_MOVE)
-                | MASK_R_OK.unchecked_mul((self.r & MASK_TO_MOVE) >> SHR_TO_MOVE)
+        let ok = if self.w & MASK_TO_MOVE != 0 {
+            MASK_W_OK
+        } else {
+            MASK_R_OK
         };
 
         // movable normal pieces/scarabs
@@ -116,6 +128,123 @@ impl Board {
             cw: cw | (MASK_W_SPHINX & to_move & !self.e) | (MASK_R_SPHINX & to_move & !self.n),
             ccw: ccw | (MASK_W_SPHINX & to_move & self.e) | (MASK_R_SPHINX & to_move & self.n),
         }
+    }
+
+    #[inline]
+    pub fn apply_laser_rule(&mut self) -> u128 {
+        // occupied squares
+        let occ = self.py | self.sc | self.an | self.ph;
+
+        // directionality maps
+        let ne = self.n & self.e;
+        let se = !self.n & self.e;
+        let sw = !self.n & !self.e;
+        let nw = self.n & !self.e;
+
+        // reflection maps
+        let r_ne = ne & self.py | (ne | sw) & self.sc;
+        let r_se = se & self.py | (se | nw) & self.sc;
+        let r_sw = sw & self.py | (sw | ne) & self.sc;
+        let r_nw = nw & self.py | (nw | se) & self.sc;
+
+        // squares vulnerable to attack from a given direction
+        let vn = self.ph | self.py & !self.n | self.an & !ne;
+        let ve = self.ph | self.py & !self.e | self.an & !se;
+        let vs = self.ph | self.py & self.n | self.an & !sw;
+        let vw = self.ph | self.py & self.e | self.an & !nw;
+
+        bb_dbg!();
+        bb_dbg!();
+        bb_dbg!();
+        bb_dbg!("apply_laser_rule({:#?})", self);
+        bb_dbg!("occ  : {:#?}", BitboardPretty(occ));
+        bb_dbg!("ne   : {:#?}", BitboardPretty(ne));
+        bb_dbg!("se   : {:#?}", BitboardPretty(se));
+        bb_dbg!("sw   : {:#?}", BitboardPretty(sw));
+        bb_dbg!("nw   : {:#?}", BitboardPretty(nw));
+        bb_dbg!("r_ne : {:#?}", BitboardPretty(r_ne));
+        bb_dbg!("r_se : {:#?}", BitboardPretty(r_se));
+        bb_dbg!("r_sw : {:#?}", BitboardPretty(r_sw));
+        bb_dbg!("r_nw : {:#?}", BitboardPretty(r_nw));
+        bb_dbg!("vn   : {:#?}", BitboardPretty(vn));
+        bb_dbg!("ve   : {:#?}", BitboardPretty(ve));
+        bb_dbg!("vs   : {:#?}", BitboardPretty(vs));
+        bb_dbg!("vw   : {:#?}", BitboardPretty(vw));
+        bb_dbg!();
+
+        // the laser!
+        let mut laser = if self.w & MASK_TO_MOVE != 0 {
+            MASK_W_SPHINX
+        } else {
+            MASK_R_SPHINX
+        };
+
+        // the laser dir!
+        let mut dir = match (self.n & laser != 0, self.e & laser != 0) {
+            (true, true) => DIR_N,
+            (false, true) => DIR_E,
+            (false, false) => DIR_S,
+            (true, false) => DIR_W,
+        };
+
+        let mut kill = 0;
+
+        while laser != 0 {
+            laser = unsafe {
+                match dir {
+                    DIR_N => laser.unchecked_shl(SHL_N as u128) & MASK_BOARD,
+                    DIR_E => laser.unchecked_shr(SHR_E as u128) & MASK_BOARD,
+                    DIR_S => laser.unchecked_shr(SHR_S as u128) & MASK_BOARD,
+                    DIR_W => laser.unchecked_shl(SHL_W as u128) & MASK_BOARD,
+                    _ => unreachable!(),
+                }
+            };
+
+            bb_dbg!("laser={:#?}", BitboardPretty(laser));
+
+            if laser & occ != 0 {
+                // reflectance and vulnerability maps for the current direction
+                // of laser travel
+                let (r_cw, r_ccw, v) = match dir {
+                    DIR_N => (r_se, r_sw, vs),
+                    DIR_E => (r_sw, r_nw, vw),
+                    DIR_S => (r_nw, r_ne, vn),
+                    DIR_W => (r_ne, r_se, ve),
+                    _ => unreachable!(),
+                };
+
+                bb_dbg!();
+                bb_dbg!("-----> DIR {}", dir);
+                bb_dbg!("laser : {:#?}", BitboardPretty(laser));
+                bb_dbg!("r_cw  : {:#?}", BitboardPretty(r_cw));
+                bb_dbg!("r_ccw : {:#?}", BitboardPretty(r_ccw));
+                bb_dbg!("v     : {:#?}", BitboardPretty(v));
+                bb_dbg!();
+
+                let ddir = (if laser & r_cw == 0 { 0 } else { 1 })
+                    | (if laser & r_ccw == 0 { 0 } else { 3 });
+
+                dir = (dir + ddir) & 3;
+
+                if ddir == 0 {
+                    kill = laser & v;
+                    break;
+                }
+            }
+        }
+
+        bb_dbg!();
+        bb_dbg!("kill={:#?}", BitboardPretty(kill));
+        bb_dbg!();
+
+        self.py &= !kill;
+        self.sc &= !kill;
+        self.an &= !kill;
+        self.ph &= !kill;
+        self.w &= !kill;
+        self.r &= !kill;
+
+        kill
     }
 }
 
@@ -174,7 +303,14 @@ struct BitboardRankPretty(u8, u8);
 
 impl fmt::Debug for BitboardRankPretty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:06b}_{:02b}{:08b}", self.0 >> 2, self.0 & 0x3, self.1)
+        write!(f, "{:06b}", self.0 >> 2)?;
+        for i in 0..2 {
+            write!(f, " {}", if self.0 >> (1 - i) & 1 == 0 { '.' } else { 'X' })?;
+        }
+        for i in 0..8 {
+            write!(f, " {}", if self.1 >> (7 - i) & 1 == 0 { '.' } else { 'X' })?;
+        }
+        Ok(())
     }
 }
 
@@ -209,11 +345,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_laser_rule() {
+        let mut board = Board::new_classic();
+
+        let before = board.clone();
+        let kill = board.apply_laser_rule();
+        assert_eq!(
+            before, board,
+            "expected no change before={:#?} board={:#?}",
+            before, board
+        );
+        assert_eq!(kill, 0);
+
+        board = before;
+        board.n &= !0x_0000_0000_0000_0001_0000_0000_0000_0000;
+        board.e &= !0x_0000_0000_0000_0001_0000_0000_0000_0000;
+        let before = board;
+        let kill = board.apply_laser_rule();
+        assert_ne!(
+            before, board,
+            "expected change before={:#?} board={:#?}",
+            before, board
+        );
+        assert_eq!(kill, 0x_0000_0000_0000_0000_0001_0000_0000_0000);
+    }
+
     #[bench]
     fn bench_movegen(b: &mut Bencher) {
         let board = Board::new_classic();
         b.iter(|| {
             black_box(board.movegen());
+        });
+    }
+
+    #[bench]
+    fn bench_laser_rule(b: &mut Bencher) {
+        let mut board = Board::new_classic();
+        b.iter(|| {
+            black_box(board.apply_laser_rule());
         });
     }
 }
