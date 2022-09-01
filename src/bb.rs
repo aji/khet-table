@@ -5,34 +5,6 @@ macro_rules! bb_dbg {
     ($($arg:tt)*) => {};
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct Board {
-    w: u128,
-    r: u128,
-
-    py: u128,
-    sc: u128,
-    an: u128,
-    ph: u128,
-
-    n: u128,
-    e: u128,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct MoveSet {
-    n: u128,
-    e: u128,
-    s: u128,
-    w: u128,
-    ne: u128,
-    se: u128,
-    sw: u128,
-    nw: u128,
-    cw: u128,
-    ccw: u128,
-}
-
 const SHR_E: usize = 0x01;
 const SHL_W: usize = 0x01;
 const SHR_S: usize = 0x10;
@@ -59,6 +31,54 @@ const DIR_N: usize = 0;
 const DIR_E: usize = 1;
 const DIR_S: usize = 2;
 const DIR_W: usize = 3;
+
+struct BitboardPretty(u128);
+
+impl fmt::Debug for BitboardPretty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let b = self.0.to_be_bytes();
+
+        f.debug_struct("bits")
+            .field("1", &BitboardRankPretty(b[0], b[1]))
+            .field("2", &BitboardRankPretty(b[2], b[3]))
+            .field("3", &BitboardRankPretty(b[4], b[5]))
+            .field("4", &BitboardRankPretty(b[6], b[7]))
+            .field("5", &BitboardRankPretty(b[8], b[9]))
+            .field("6", &BitboardRankPretty(b[10], b[11]))
+            .field("7", &BitboardRankPretty(b[12], b[13]))
+            .field("8", &BitboardRankPretty(b[14], b[15]))
+            .finish()
+    }
+}
+
+struct BitboardRankPretty(u8, u8);
+
+impl fmt::Debug for BitboardRankPretty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:06b}", self.0 >> 2)?;
+        for i in 0..2 {
+            write!(f, " {}", if self.0 >> (1 - i) & 1 == 0 { '.' } else { 'X' })?;
+        }
+        for i in 0..8 {
+            write!(f, " {}", if self.1 >> (7 - i) & 1 == 0 { '.' } else { 'X' })?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct Board {
+    w: u128,
+    r: u128,
+
+    py: u128,
+    sc: u128,
+    an: u128,
+    ph: u128,
+
+    n: u128,
+    e: u128,
+}
 
 impl Board {
     pub fn new_classic() -> Board {
@@ -263,6 +283,20 @@ impl fmt::Debug for Board {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct MoveSet {
+    n: u128,
+    e: u128,
+    s: u128,
+    w: u128,
+    ne: u128,
+    se: u128,
+    sw: u128,
+    nw: u128,
+    cw: u128,
+    ccw: u128,
+}
+
 impl fmt::Debug for MoveSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MoveSet")
@@ -277,40 +311,6 @@ impl fmt::Debug for MoveSet {
             .field("cw ", &BitboardPretty(self.cw))
             .field("ccw", &BitboardPretty(self.ccw))
             .finish()
-    }
-}
-
-struct BitboardPretty(u128);
-
-impl fmt::Debug for BitboardPretty {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let b = self.0.to_be_bytes();
-
-        f.debug_struct("bits")
-            .field("1", &BitboardRankPretty(b[0], b[1]))
-            .field("2", &BitboardRankPretty(b[2], b[3]))
-            .field("3", &BitboardRankPretty(b[4], b[5]))
-            .field("4", &BitboardRankPretty(b[6], b[7]))
-            .field("5", &BitboardRankPretty(b[8], b[9]))
-            .field("6", &BitboardRankPretty(b[10], b[11]))
-            .field("7", &BitboardRankPretty(b[12], b[13]))
-            .field("8", &BitboardRankPretty(b[14], b[15]))
-            .finish()
-    }
-}
-
-struct BitboardRankPretty(u8, u8);
-
-impl fmt::Debug for BitboardRankPretty {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:06b}", self.0 >> 2)?;
-        for i in 0..2 {
-            write!(f, " {}", if self.0 >> (1 - i) & 1 == 0 { '.' } else { 'X' })?;
-        }
-        for i in 0..8 {
-            write!(f, " {}", if self.1 >> (7 - i) & 1 == 0 { '.' } else { 'X' })?;
-        }
-        Ok(())
     }
 }
 
