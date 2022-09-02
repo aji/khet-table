@@ -26,6 +26,7 @@ use rand::seq::SliceRandom;
 
 pub mod bb;
 pub mod board;
+pub mod model;
 pub mod render;
 
 pub struct TranscriptItem {
