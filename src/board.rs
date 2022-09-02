@@ -1514,6 +1514,7 @@ fn alpha_beta_heavy_iter<B: TreeComputeBudget, F: Fn(Position) -> isize>(
 #[cfg(test)]
 mod tests {
     use super::Position;
+    use rand::seq::SliceRandom;
     use test::{black_box, Bencher};
 
     #[bench]
@@ -1523,6 +1524,7 @@ mod tests {
         b.iter(|| {
             moves.truncate(0);
             pos.add_moves(&mut moves);
+            black_box(moves.len());
         });
     }
 
@@ -1531,6 +1533,19 @@ mod tests {
         let mut pos = Position::new_classic();
         b.iter(|| {
             black_box(pos.board.apply_laser_rule(super::CC_WHITE));
+        });
+    }
+
+    #[bench]
+    fn bench_full_mcts_rollout_iter(b: &mut Bencher) {
+        let mut moves = Vec::with_capacity(80);
+        let pos = Position::new_classic();
+        b.iter(|| {
+            let mut p = pos.clone();
+            moves.truncate(0);
+            p.add_moves(&mut moves);
+            p.apply_move(*moves.choose(&mut rand::thread_rng()).unwrap());
+            black_box(p.winner());
         });
     }
 }

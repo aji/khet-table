@@ -32,6 +32,78 @@ const DIR_E: usize = 1;
 const DIR_S: usize = 2;
 const DIR_W: usize = 3;
 
+fn swap_bits(x: u128, s: u128, d: u128) -> u128 {
+    let dx = if x & s == 0 { 0 } else { d };
+    let sx = if x & d == 0 { 0 } else { s };
+    x & !s & !d | dx | sx
+}
+
+fn nth_bit(v: u128, mut r: u8) -> u128 {
+    let a = (v & 0x_5555_5555_5555_5555_5555_5555_5555_5555)
+        + ((v >> 1) & 0x_5555_5555_5555_5555_5555_5555_5555_5555);
+    let b = (a & 0x_3333_3333_3333_3333_3333_3333_3333_3333)
+        + ((a >> 2) & 0x_3333_3333_3333_3333_3333_3333_3333_3333);
+    let c = (b & 0x_0f0f_0f0f_0f0f_0f0f_0f0f_0f0f_0f0f_0f0f)
+        + ((b >> 4) & 0x_0f0f_0f0f_0f0f_0f0f_0f0f_0f0f_0f0f_0f0f);
+    let d = (c & 0x_00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff)
+        + ((c >> 8) & 0x_00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff);
+    let e = (d & 0x_0000_ffff_0000_ffff_0000_ffff_0000_ffff)
+        + ((d >> 16) & 0x_0000_ffff_0000_ffff_0000_ffff_0000_ffff);
+
+    let mut s = 128;
+    let mut t = (e >> 32) + (e >> 64) + (e >> 96);
+
+    unsafe {
+        s -= (t.unchecked_sub(r as u128) & 256) >> 2;
+        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
+        t = (d >> (s - 32)) & 0xffff;
+
+        s -= (t.unchecked_sub(r as u128) & 256) >> 3;
+        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
+        t = (d >> (s - 16)) & 0xff;
+
+        s -= (t.unchecked_sub(r as u128) & 256) >> 4;
+        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
+        t = (c >> (s - 8)) & 0xf;
+
+        s -= (t.unchecked_sub(r as u128) & 256) >> 5;
+        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
+        t = (b >> (s - 4)) & 0x7;
+
+        s -= (t.unchecked_sub(r as u128) & 256) >> 6;
+        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
+        t = (a >> (s - 2)) & 0x3;
+
+        s -= (t.unchecked_sub(r as u128) & 256) >> 7;
+        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
+        t = (v >> (s - 1)) & 0x1;
+
+        s -= (t.unchecked_sub(r as u128) & 256) >> 8;
+        s = 128 - s;
+    }
+
+    1u128 << s
+}
+
+#[test]
+fn test_nth_bit() {
+    let v = 0x_0004_0080_0040_0285_0285_0008_0004_0080;
+    assert_eq!(nth_bit(v, 0), 1 << 7);
+    assert_eq!(nth_bit(v, 1), 1 << 18);
+    assert_eq!(nth_bit(v, 2), 1 << 35);
+    assert_eq!(nth_bit(v, 3), 1 << 48);
+    assert_eq!(nth_bit(v, 4), 1 << 50);
+    assert_eq!(nth_bit(v, 5), 1 << 55);
+    assert_eq!(nth_bit(v, 6), 1 << 57);
+    assert_eq!(nth_bit(v, 7), 1 << 64);
+    assert_eq!(nth_bit(v, 8), 1 << 66);
+    assert_eq!(nth_bit(v, 9), 1 << 71);
+    assert_eq!(nth_bit(v, 10), 1 << 73);
+    assert_eq!(nth_bit(v, 11), 1 << 86);
+    assert_eq!(nth_bit(v, 12), 1 << 103);
+    assert_eq!(nth_bit(v, 13), 1 << 114);
+}
+
 struct BitboardPretty(u128);
 
 impl fmt::Debug for BitboardPretty {
@@ -98,7 +170,7 @@ impl Board {
 
     #[inline]
     pub fn is_terminal(self) -> bool {
-        self.ph.count_ones() == 2
+        self.ph.count_ones() != 2
     }
 
     #[inline]
@@ -134,19 +206,46 @@ impl Board {
         let cw = (self.py | self.sc | self.an) & to_move;
         let ccw = (self.py | self.an) & to_move;
 
-        MoveSet {
-            n: p & (p_ok >> SHL_N) | sc & (sc_ok >> SHL_N),
-            e: p & (p_ok << SHR_E) | sc & (sc_ok << SHR_E),
-            s: p & (p_ok << SHR_S) | sc & (sc_ok << SHR_S),
-            w: p & (p_ok >> SHL_W) | sc & (sc_ok >> SHL_W),
+        MoveSet::new(
+            p & (p_ok >> SHL_N) | sc & (sc_ok >> SHL_N),
+            p & (p_ok << SHR_E) | sc & (sc_ok << SHR_E),
+            p & (p_ok << SHR_S) | sc & (sc_ok << SHR_S),
+            p & (p_ok >> SHL_W) | sc & (sc_ok >> SHL_W),
+            p & (p_ok >> SHL_NE) | sc & (sc_ok >> SHL_NE),
+            p & (p_ok << SHR_SE) | sc & (sc_ok << SHR_SE),
+            p & (p_ok << SHR_SW) | sc & (sc_ok << SHR_SW),
+            p & (p_ok >> SHL_NW) | sc & (sc_ok >> SHL_NW),
+            cw | (MASK_W_SPHINX & to_move & !self.e) | (MASK_R_SPHINX & to_move & !self.n),
+            ccw | (MASK_W_SPHINX & to_move & self.e) | (MASK_R_SPHINX & to_move & self.n),
+        )
+    }
 
-            ne: p & (p_ok >> SHL_NE) | sc & (sc_ok >> SHL_NE),
-            se: p & (p_ok << SHR_SE) | sc & (sc_ok << SHR_SE),
-            sw: p & (p_ok << SHR_SW) | sc & (sc_ok << SHR_SW),
-            nw: p & (p_ok >> SHL_NW) | sc & (sc_ok >> SHL_NW),
-
-            cw: cw | (MASK_W_SPHINX & to_move & !self.e) | (MASK_R_SPHINX & to_move & !self.n),
-            ccw: ccw | (MASK_W_SPHINX & to_move & self.e) | (MASK_R_SPHINX & to_move & self.n),
+    #[inline]
+    pub fn apply_move(&mut self, m: Move) {
+        match m.dd {
+            0 => {
+                self.w = swap_bits(self.w, m.s, m.d);
+                self.r = swap_bits(self.r, m.s, m.d);
+                self.py = swap_bits(self.py, m.s, m.d);
+                self.sc = swap_bits(self.sc, m.s, m.d);
+                self.an = swap_bits(self.an, m.s, m.d);
+                self.ph = swap_bits(self.ph, m.s, m.d);
+                self.n = swap_bits(self.n, m.s, m.d);
+                self.e = swap_bits(self.e, m.s, m.d);
+            }
+            1 => {
+                let n = if self.e & m.s != 0 { 0 } else { m.s };
+                let e = if self.n & m.s == 0 { 0 } else { m.s };
+                self.n = (self.n & !m.s) | n;
+                self.e = (self.e & !m.s) | e;
+            }
+            3 => {
+                let n = if self.e & m.s == 0 { 0 } else { m.s };
+                let e = if self.n & m.s != 0 { 0 } else { m.s };
+                self.n = (self.n & !m.s) | n;
+                self.e = (self.e & !m.s) | e;
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -266,6 +365,11 @@ impl Board {
 
         kill
     }
+
+    pub fn switch_turn(&mut self) {
+        self.w ^= MASK_TO_MOVE;
+        self.r ^= MASK_TO_MOVE;
+    }
 }
 
 impl fmt::Debug for Board {
@@ -284,32 +388,132 @@ impl fmt::Debug for Board {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct MoveSet {
-    n: u128,
-    e: u128,
+pub struct Move {
     s: u128,
-    w: u128,
-    ne: u128,
-    se: u128,
-    sw: u128,
-    nw: u128,
-    cw: u128,
-    ccw: u128,
+    d: u128,
+    dd: usize,
+}
+
+impl Move {
+    fn shl(s: u128, shl: usize) -> Move {
+        let d = s << shl;
+        Move { s, d, dd: 0 }
+    }
+
+    fn shr(s: u128, shr: usize) -> Move {
+        let d = s >> shr;
+        Move { s, d, dd: 0 }
+    }
+
+    fn rot(s: u128, dd: usize) -> Move {
+        Move { s, d: s, dd }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct MoveSet([u128; 10]);
+
+impl MoveSet {
+    fn new(
+        n: u128,
+        e: u128,
+        s: u128,
+        w: u128,
+        ne: u128,
+        se: u128,
+        sw: u128,
+        nw: u128,
+        cw: u128,
+        ccw: u128,
+    ) -> MoveSet {
+        MoveSet([n, e, s, w, ne, se, sw, nw, cw, ccw])
+    }
+
+    pub fn rand_move(&self) -> Move {
+        let mut bits = [
+            self.0[0].count_ones() as u8,
+            self.0[1].count_ones() as u8,
+            self.0[2].count_ones() as u8,
+            self.0[3].count_ones() as u8,
+            self.0[4].count_ones() as u8,
+            self.0[5].count_ones() as u8,
+            self.0[6].count_ones() as u8,
+            self.0[7].count_ones() as u8,
+            self.0[8].count_ones() as u8,
+            self.0[9].count_ones() as u8,
+        ];
+
+        bits[1] += bits[0];
+        bits[2] += bits[1];
+        bits[3] += bits[2];
+        bits[4] += bits[3];
+        bits[5] += bits[4];
+        bits[6] += bits[5];
+        bits[7] += bits[6];
+        bits[8] += bits[7];
+        bits[9] += bits[8];
+
+        let i = rand::random::<u8>() % bits[9];
+
+        // 0   b0   b1   b2   b3   b4   b5   b6   b7   b8   b9
+        //                         |
+        //               |         |              |
+        //          |  2 | 3  | 4  |         | 7  | 8  |  9
+        //  0  | 1  |    |    |    | 5  | 6  |    |    |
+
+        if i < bits[4] {
+            if i < bits[2] {
+                if i < bits[1] {
+                    if i < bits[0] {
+                        Move::shl(nth_bit(self.0[0], i), SHL_N)
+                    } else {
+                        Move::shr(nth_bit(self.0[1], i - bits[0]), SHR_E)
+                    }
+                } else {
+                    Move::shr(nth_bit(self.0[2], i - bits[1]), SHR_S)
+                }
+            } else {
+                if i < bits[3] {
+                    Move::shl(nth_bit(self.0[3], i - bits[2]), SHL_W)
+                } else {
+                    Move::shl(nth_bit(self.0[4], i - bits[3]), SHL_NE)
+                }
+            }
+        } else {
+            if i < bits[7] {
+                if i < bits[6] {
+                    if i < bits[5] {
+                        Move::shr(nth_bit(self.0[5], i - bits[4]), SHR_SE)
+                    } else {
+                        Move::shr(nth_bit(self.0[6], i - bits[5]), SHR_SW)
+                    }
+                } else {
+                    Move::shl(nth_bit(self.0[7], i - bits[6]), SHL_NW)
+                }
+            } else {
+                if i < bits[8] {
+                    Move::rot(nth_bit(self.0[8], i - bits[7]), 1)
+                } else {
+                    Move::rot(nth_bit(self.0[9], i - bits[8]), 3)
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Debug for MoveSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MoveSet")
-            .field("n  ", &BitboardPretty(self.n))
-            .field("e  ", &BitboardPretty(self.e))
-            .field("s  ", &BitboardPretty(self.s))
-            .field("w  ", &BitboardPretty(self.w))
-            .field("ne ", &BitboardPretty(self.ne))
-            .field("se ", &BitboardPretty(self.se))
-            .field("sw ", &BitboardPretty(self.sw))
-            .field("nw ", &BitboardPretty(self.nw))
-            .field("cw ", &BitboardPretty(self.cw))
-            .field("ccw", &BitboardPretty(self.ccw))
+            .field("n  ", &BitboardPretty(self.0[0]))
+            .field("e  ", &BitboardPretty(self.0[1]))
+            .field("s  ", &BitboardPretty(self.0[2]))
+            .field("w  ", &BitboardPretty(self.0[3]))
+            .field("ne ", &BitboardPretty(self.0[4]))
+            .field("se ", &BitboardPretty(self.0[5]))
+            .field("sw ", &BitboardPretty(self.0[6]))
+            .field("nw ", &BitboardPretty(self.0[7]))
+            .field("cw ", &BitboardPretty(self.0[8]))
+            .field("ccw", &BitboardPretty(self.0[9]))
             .finish()
     }
 }
@@ -323,20 +527,18 @@ mod tests {
     #[test]
     fn test_movegen() {
         let actual = Board::new_classic().movegen();
-        let expected = MoveSet {
-            n: 0x_0000_0000_0040_0081_0000_0000_0004_00f0,
-            e: 0x_0000_0000_0040_0080_0090_0000_0004_0010,
-            s: 0x_0000_0000_0040_0000_00b1_0000_0004_0000,
-            w: 0x_0000_0000_0040_0081_00a1_0000_0004_0080,
-
-            ne: 0x_0000_0000_0040_0000_0090_0000_0004_00f0,
-            se: 0x_0000_0000_0000_0080_00b0_0000_0000_0000,
-            sw: 0x_0000_0000_0000_0081_00b1_0000_0004_0000,
-            nw: 0x_0000_0000_0000_0081_00a1_0000_0000_00f0,
-
-            cw: 0x_0000_0000_0040_0081_00b1_0000_0004_00d0,
-            ccw: 0x_0000_0000_0040_0081_0081_0000_0004_00d1,
-        };
+        let expected = MoveSet::new(
+            0x_0000_0000_0040_0081_0000_0000_0004_00f0,
+            0x_0000_0000_0040_0080_0090_0000_0004_0010,
+            0x_0000_0000_0040_0000_00b1_0000_0004_0000,
+            0x_0000_0000_0040_0081_00a1_0000_0004_0080,
+            0x_0000_0000_0040_0000_0090_0000_0004_00f0,
+            0x_0000_0000_0000_0080_00b0_0000_0000_0000,
+            0x_0000_0000_0000_0081_00b1_0000_0004_0000,
+            0x_0000_0000_0000_0081_00a1_0000_0000_00f0,
+            0x_0000_0000_0040_0081_00b1_0000_0004_00d0,
+            0x_0000_0000_0040_0081_0081_0000_0004_00d1,
+        );
 
         assert_eq!(
             expected, actual,
@@ -372,11 +574,9 @@ mod tests {
     }
 
     #[bench]
-    fn bench_movegen(b: &mut Bencher) {
+    fn bench_movegen_rand_move(b: &mut Bencher) {
         let board = Board::new_classic();
-        b.iter(|| {
-            black_box(board.movegen());
-        });
+        b.iter(|| black_box(board.movegen().rand_move()));
     }
 
     #[bench]
@@ -384,6 +584,19 @@ mod tests {
         let mut board = Board::new_classic();
         b.iter(|| {
             black_box(board.apply_laser_rule());
+        });
+    }
+
+    #[bench]
+    fn bench_full_mcts_rollout_iter(b: &mut Bencher) {
+        let board = Board::new_classic();
+        b.iter(|| {
+            let mut b = board;
+            b.apply_move(b.movegen().rand_move());
+            b.apply_laser_rule();
+            b.switch_turn();
+            black_box(b.is_terminal());
+            black_box(b.red_wins());
         });
     }
 }
