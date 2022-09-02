@@ -49,40 +49,71 @@ fn nth_bit(v: u128, mut r: u8) -> u128 {
         + ((c >> 8) & 0x_00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff);
     let e = (d & 0x_0000_ffff_0000_ffff_0000_ffff_0000_ffff)
         + ((d >> 16) & 0x_0000_ffff_0000_ffff_0000_ffff_0000_ffff);
+    let f = (e & 0x_0000_0000_ffff_ffff_0000_0000_ffff_ffff)
+        + ((e >> 32) & 0x_0000_0000_ffff_ffff_0000_0000_ffff_ffff);
+
+    r = ((f >> 64) + (f & 0xffff_ffff_ffff_ffff)) as u8 - r;
+
+    bb_dbg!("v={:32x}", v);
+    bb_dbg!("a={:32x}", a);
+    bb_dbg!("b={:32x}", b);
+    bb_dbg!("c={:32x}", c);
+    bb_dbg!("d={:32x}", d);
+    bb_dbg!("e={:32x}", e);
+    bb_dbg!("f={:32x}", f);
 
     let mut s = 128;
-    let mut t = (e >> 32) + (e >> 64) + (e >> 96);
+    let mut t = (f >> 64) as u8;
 
-    unsafe {
-        s -= (t.unchecked_sub(r as u128) & 256) >> 2;
-        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
-        t = (d >> (s - 32)) & 0xffff;
-
-        s -= (t.unchecked_sub(r as u128) & 256) >> 3;
-        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
-        t = (d >> (s - 16)) & 0xff;
-
-        s -= (t.unchecked_sub(r as u128) & 256) >> 4;
-        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
-        t = (c >> (s - 8)) & 0xf;
-
-        s -= (t.unchecked_sub(r as u128) & 256) >> 5;
-        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
-        t = (b >> (s - 4)) & 0x7;
-
-        s -= (t.unchecked_sub(r as u128) & 256) >> 6;
-        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
-        t = (a >> (s - 2)) & 0x3;
-
-        s -= (t.unchecked_sub(r as u128) & 256) >> 7;
-        r -= (t & (t.unchecked_sub(r as u128) >> 8)) as u8;
-        t = (v >> (s - 1)) & 0x1;
-
-        s -= (t.unchecked_sub(r as u128) & 256) >> 8;
-        s = 128 - s;
+    bb_dbg!("64 {:03} {:03} {:03}", s, r, t);
+    if r > t {
+        s -= 64;
+        r -= t;
     }
+    bb_dbg!("   {:03} {:03} {:03}", s, r, t);
+    t = ((e >> (s - 32)) & 0xff) as u8;
+    bb_dbg!("32 {:03} {:03} {:03}", s, r, t);
+    if r > t {
+        s -= 32;
+        r -= t;
+    }
+    bb_dbg!("   {:03} {:03} {:03}", s, r, t);
+    t = ((d >> (s - 16)) & 0xff) as u8;
+    bb_dbg!("16 {:03} {:03} {:03}", s, r, t);
+    if r > t {
+        s -= 16;
+        r -= t;
+    }
+    bb_dbg!("   {:03} {:03} {:03}", s, r, t);
+    t = ((c >> (s - 8)) & 0xff) as u8;
+    bb_dbg!(" 8 {:03} {:03} {:03}", s, r, t);
+    if r > t {
+        s -= 8;
+        r -= t;
+    }
+    bb_dbg!("   {:03} {:03} {:03}", s, r, t);
+    t = ((b >> (s - 4)) & 0xf) as u8;
+    bb_dbg!(" 4 {:03} {:03} {:03}", s, r, t);
+    if r > t {
+        s -= 4;
+        r -= t;
+    }
+    bb_dbg!("   {:03} {:03} {:03}", s, r, t);
+    t = ((a >> (s - 2)) & 0x3) as u8;
+    bb_dbg!(" 2 {:03} {:03} {:03}", s, r, t);
+    if r > t {
+        s -= 2;
+        r -= t;
+    }
+    bb_dbg!("   {:03} {:03} {:03}", s, r, t);
+    t = ((v >> (s - 1)) & 0x1) as u8;
+    bb_dbg!(" 1 {:03} {:03} {:03}", s, r, t);
+    if r > t {
+        s -= 1;
+    }
+    bb_dbg!("   {:03} {:03} {:03}", s, r, t);
 
-    1u128 << s
+    1u128 << (s - 1)
 }
 
 #[test]
