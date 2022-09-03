@@ -447,6 +447,41 @@ impl Position {
         }
     }
 
+    pub fn new_dynasty() -> Position {
+        let mut data: Vec<u8> = (0..80).map(|_| C_EMPTY).collect();
+        data[0] = CC_RED | CR_SPHINX | CD_SOUTH;
+        data[4] = CC_RED | CR_PYRAMID | CD_SOUTH;
+        data[5] = CC_RED | CR_ANUBIS | CD_SOUTH;
+        data[6] = CC_RED | CR_PYRAMID | CD_EAST;
+        data[15] = CC_RED | CR_PHARAOH | CD_SOUTH;
+        data[20] = CC_RED | CR_PYRAMID | CD_NORTH;
+        data[24] = CC_RED | CR_PYRAMID | CD_SOUTH;
+        data[25] = CC_RED | CR_ANUBIS | CD_SOUTH;
+        data[26] = CC_RED | CR_SCARAB | CD_EAST;
+        data[30] = CC_RED | CR_PYRAMID | CD_EAST;
+        data[32] = CC_RED | CR_SCARAB | CD_NORTH;
+        data[34] = CC_WHITE | CR_PYRAMID | CD_WEST;
+        data[36] = CC_WHITE | CR_PYRAMID | CD_EAST;
+        data[43] = CC_RED | CR_PYRAMID | CD_WEST;
+        data[45] = CC_RED | CR_PYRAMID | CD_EAST;
+        data[47] = CC_WHITE | CR_SCARAB | CD_NORTH;
+        data[53] = CC_WHITE | CR_SCARAB | CD_EAST;
+        data[54] = CC_WHITE | CR_ANUBIS | CD_NORTH;
+        data[55] = CC_WHITE | CR_PYRAMID | CD_NORTH;
+        data[59] = CC_WHITE | CR_PYRAMID | CD_SOUTH;
+        data[64] = CC_WHITE | CR_PHARAOH | CD_NORTH;
+        data[73] = CC_WHITE | CR_PYRAMID | CD_WEST;
+        data[74] = CC_WHITE | CR_ANUBIS | CD_NORTH;
+        data[75] = CC_WHITE | CR_PYRAMID | CD_NORTH;
+        data[79] = CC_WHITE | CR_SPHINX | CD_NORTH;
+        Position {
+            to_move: Color::White,
+            board: data.iter().copied().collect(),
+            has_white: true,
+            has_red: true,
+        }
+    }
+
     pub fn new_tmp() -> Position {
         let mut data: Vec<u8> = (0..80).map(|_| C_EMPTY).collect();
         /*

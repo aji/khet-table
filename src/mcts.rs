@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use bumpalo::{collections::Vec, Bump};
+use rand::seq::SliceRandom;
 use rayon::prelude::*;
 
 use crate::bb;
@@ -108,25 +109,25 @@ pub fn traditional_rollout(input_board: &bb::Board) -> f64 {
 pub fn smart_rollout(input_board: &bb::Board) -> f64 {
     let mut board = input_board.clone();
 
-    for _ in 0..500 {
+    loop {
         if board.is_terminal() {
             return if board.white_wins() { 1.0 } else { -1.0 };
         }
         let mut next = board;
-        for _ in 0..10 {
+        let moves = next.movegen();
+        for _ in 0..50 {
             next = board;
-            let m = next.movegen().rand_move();
+            let m = moves.rand_move();
             next.apply_move(m);
+            let my_pharaoh = next.my_pharaoh();
             let kill = next.apply_laser_rule();
-            if board.my_pharaoh() != kill {
+            if my_pharaoh != kill {
                 break;
             }
         }
         next.switch_turn();
         board = next;
     }
-
-    0.0
 }
 
 struct Node<'alo> {
@@ -265,7 +266,12 @@ fn gen_children_in<'alo, R: Rollout>(
     rollout: &R,
     bump: &'alo Bump,
 ) -> Vec<'alo, Node<'alo>> {
-    let moves = board.movegen().to_vec();
+    let moves = {
+        let mut moves = board.movegen().to_vec();
+        moves.shuffle(&mut rand::thread_rng());
+        moves
+    };
+
     let mut children = Vec::with_capacity_in(moves.len(), bump);
     let mut rollouts: std::vec::Vec<(bb::Board, Score)> = std::vec::Vec::with_capacity(moves.len());
 

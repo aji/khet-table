@@ -28,6 +28,7 @@ use rand::seq::SliceRandom;
 
 pub mod bb;
 pub mod board;
+pub mod learn;
 pub mod mcts;
 pub mod model;
 pub mod render;
@@ -915,7 +916,7 @@ fn run_game(
             return GameResult::winner(winner);
         }
 
-        if log.items.len() >= 200 {
+        if log.items.len() >= 100 {
             return GameResult::Draw;
         }
 
@@ -1081,7 +1082,7 @@ impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
 
             run_game(
                 header.as_str(),
-                board::Position::new_classic(),
+                board::Position::new_dynasty(),
                 &mut p1,
                 &mut p2,
                 self.clock_main,
@@ -1089,6 +1090,8 @@ impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
                 self.clock_limit,
             )
         });
+
+        thread::sleep(Duration::from_secs(2));
 
         self.p2p1.record({
             let mut p1 = (self.p1)();
@@ -1097,7 +1100,7 @@ impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
 
             run_game(
                 header.as_str(),
-                board::Position::new_classic(),
+                board::Position::new_dynasty(),
                 &mut p2,
                 &mut p1,
                 self.clock_main,
@@ -1105,6 +1108,8 @@ impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
                 self.clock_limit,
             )
         });
+
+        thread::sleep(Duration::from_secs(2));
     }
 
     fn format_header(&self, p1: &P1, p2: &P2) -> String {
@@ -1219,9 +1224,9 @@ fn compare_main() {
     let mut compare = Comparator::new(
         || NewMctsPlayer::new(1.0),
         || MctsPlayer::new(board::BacktrackRollout::new(1.0)),
-        5.0,
-        5.0,
-        5.0,
+        6.0,
+        6.0,
+        6.0,
     );
 
     loop {
@@ -1286,7 +1291,7 @@ fn league_main() {
 }
 
 fn main() {
-    league_main();
+    learn::learn_main();
 }
 
 /*
