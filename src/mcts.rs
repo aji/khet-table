@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use bumpalo::{collections::Vec, Bump};
+use rayon::prelude::*;
 
 use crate::bb;
 
@@ -80,11 +81,11 @@ pub fn stats_debug(s: &Stats) {
     println!("{:#?}", s);
 }
 
-pub trait Rollout {
+pub trait Rollout: Sync {
     fn rollout(&self, board: &bb::Board) -> f64;
 }
 
-impl<F: Fn(&bb::Board) -> f64> Rollout for F {
+impl<F: Fn(&bb::Board) -> f64 + Sync> Rollout for F {
     fn rollout(&self, board: &bb::Board) -> f64 {
         (*self)(board)
     }
@@ -112,7 +113,7 @@ pub fn smart_rollout(input_board: &bb::Board) -> f64 {
             return if board.white_wins() { 1.0 } else { -1.0 };
         }
         let mut next = board;
-        for _ in 0..3 {
+        for _ in 0..10 {
             next = board;
             let m = next.movegen().rand_move();
             next.apply_move(m);
@@ -189,8 +190,8 @@ pub fn search<R: Rollout, S: StatsSink>(
 
         let root_children = root.children.as_ref().unwrap();
         top_move = pick_top(root_children);
-        top_confidence = (root_children[top_move].score.visits as f64 / root.score.visits as f64)
-            * (1.0 - 1.0 / (root.score.visits as f64).sqrt());
+        top_confidence =
+            root_children[top_move].score.visits as f64 / (root.score.visits + 1000) as f64;
 
         stats = Stats {
             root_visits: root.score.visits,
@@ -266,16 +267,24 @@ fn gen_children_in<'alo, R: Rollout>(
 ) -> Vec<'alo, Node<'alo>> {
     let moves = board.movegen().to_vec();
     let mut children = Vec::with_capacity_in(moves.len(), bump);
+    let mut rollouts: std::vec::Vec<(bb::Board, Score)> = std::vec::Vec::with_capacity(moves.len());
 
-    for m in moves {
-        let next = {
-            let mut next = board.clone();
-            next.apply_move(m);
-            next.apply_laser_rule();
-            next.switch_turn();
-            next
-        };
-        let initial_score = calc_initial_score(&next, rollout);
+    moves
+        .par_iter()
+        .map(|m| {
+            let next = {
+                let mut next = board.clone();
+                next.apply_move(*m);
+                next.apply_laser_rule();
+                next.switch_turn();
+                next
+            };
+            let initial_score = calc_initial_score(&next, rollout);
+            (next, initial_score)
+        })
+        .collect_into_vec(&mut rollouts);
+
+    for (next, initial_score) in rollouts.into_iter() {
         children.push(Node::leaf(next, initial_score));
     }
 

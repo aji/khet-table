@@ -9,6 +9,7 @@ extern crate env_logger;
 extern crate euclid;
 extern crate pixels;
 extern crate raqote;
+extern crate rayon;
 extern crate serde;
 extern crate serde_json;
 extern crate test;
@@ -141,7 +142,7 @@ impl Transcript {
             } else {
                 if i < self.items.len() as i64 {
                     print!(
-                        " {:3}. {} {:11}",
+                        " {:3}. {}  {:11} : ",
                         (i / 2) + 1,
                         TranscriptEval(self.items[i as usize].value),
                         format!("{}", self.items[i as usize])
@@ -149,7 +150,7 @@ impl Transcript {
                 }
                 if j < self.items.len() as i64 {
                     println!(
-                        "  {} {}",
+                        "  {}  {}",
                         self.items[j as usize],
                         TranscriptEval(self.items[j as usize].value),
                     );
@@ -166,7 +167,7 @@ struct TranscriptEval(Option<f64>);
 impl fmt::Display for TranscriptEval {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(v) = self.0 {
-            let col = ((v + 1.0) * 10.0) as usize;
+            let col = ((-v + 1.0) * 10.0) as usize;
             for i in 0..=20 {
                 if i == col {
                     write!(f, "O")?
@@ -597,7 +598,15 @@ impl Display for DepthLimitedAlphaBetaPlayerEvalLaser {
     }
 }
 
-struct NewMctsPlayer;
+struct NewMctsPlayer {
+    explore: f64,
+}
+
+impl NewMctsPlayer {
+    fn new(explore: f64) -> NewMctsPlayer {
+        NewMctsPlayer { explore }
+    }
+}
 
 impl GamePlayer for NewMctsPlayer {
     fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
@@ -660,7 +669,7 @@ impl GamePlayer for NewMctsPlayer {
         let (m, m_stats) = mcts::search(
             board,
             &budget,
-            1.0,
+            self.explore,
             &mcts::smart_rollout,
             NewMctsPlayerReporter::new(clock),
         );
@@ -682,7 +691,7 @@ impl GamePlayer for NewMctsPlayer {
 
 impl Display for NewMctsPlayer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bb-mcts()")
+        write!(f, "bb-mcts({:.1})", self.explore)
     }
 }
 
@@ -720,11 +729,11 @@ impl<'a> mcts::StatsSink for NewMctsPlayerReporter<'a> {
     fn report(&mut self, stats: &mcts::Stats) -> () {
         if self.last_print.elapsed().as_millis() > 100 {
             print!(
-                "\x1b[G\x1b[K{} value={:+.3} {:+.3} tv={:.3} tc={:.3} {:8.1}iter/sec sz={}",
+                "\x1b[G\x1b[K{} value={:+.3}{:+.3} d={} tc={:.3} {:8.1}/s sz={}",
                 self.clock,
                 stats.root_value,
                 stats.top_move_value - stats.root_value,
-                stats.top_move_visits as f64 / stats.root_visits as f64,
+                stats.tree_max_depth,
                 stats.top_confidence,
                 stats.root_visits as f64 / stats.time.as_secs_f64(),
                 Bytes(stats.bytes)
@@ -1203,15 +1212,16 @@ fn new_mcts_main() {
     }
 }
 
-fn main() {
+#[allow(unused)]
+fn compare_main() {
     env_logger::init();
 
     let mut compare = Comparator::new(
-        || NewMctsPlayer,
+        || NewMctsPlayer::new(1.0),
         || MctsPlayer::new(board::BacktrackRollout::new(1.0)),
-        10.0,
-        10.0,
-        10.0,
+        5.0,
+        5.0,
+        5.0,
     );
 
     loop {
@@ -1247,7 +1257,7 @@ fn play_main() {
 fn league_main() {
     env_logger::init();
 
-    let mut league = League::new(60., 60., 60.);
+    let mut league = League::new(1., 1., 1.);
 
     //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(2));
     //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(3));
@@ -1259,8 +1269,10 @@ fn league_main() {
     //league.add_player(TimeLimitedV1AlphaBetaPlayerEvalMaterial);
     //league.add_player(TimeLimitedAlphaBetaPlayerEvalLaser);
     league.add_player(MctsPlayer::new(board::BacktrackRollout::new(1.0)));
-    league.add_player(MctsPlayer::new(board::BacktrackRollout::bugged(1.0)));
-    //league.add_player(MctsPlayer::new(board::UniformRollout::new(1.0)));
+    league.add_player(MctsPlayer::new(board::UniformRollout::new(1.0)));
+    league.add_player(NewMctsPlayer::new(1.0));
+    league.add_player(NewMctsPlayer::new(1.2));
+    league.add_player(NewMctsPlayer::new(0.7));
     //league.add_player(MctsPlayer::new(board::CoinTossRollout));
 
     loop {
@@ -1271,6 +1283,10 @@ fn league_main() {
         };
         thread::sleep(Duration::from_secs(3));
     }
+}
+
+fn main() {
+    league_main();
 }
 
 /*
