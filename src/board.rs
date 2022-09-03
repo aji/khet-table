@@ -166,9 +166,9 @@ impl MoveInfo {
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct Move {
-    sx: Index,
-    dx: Index,
-    ddir: u8,
+    pub sx: Index,
+    pub dx: Index,
+    pub ddir: u8,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]

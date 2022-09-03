@@ -14,18 +14,18 @@ const SHL_NW: usize = 0x11;
 const SHR_SW: usize = 0x0f;
 const SHL_NE: usize = 0x0f;
 
-const MASK_BOARD: u128 = 0x_03ff_03ff_03ff_03ff_03ff_03ff_03ff_03ff;
+pub const MASK_BOARD: u128 = 0x_03ff_03ff_03ff_03ff_03ff_03ff_03ff_03ff;
 
-const MASK_W_ONLY: u128 = 0x_0101_0001_0001_0001_0001_0001_0001_0101;
-const MASK_R_ONLY: u128 = 0x_0202_0200_0200_0200_0200_0200_0200_0202;
+pub const MASK_W_ONLY: u128 = 0x_0101_0001_0001_0001_0001_0001_0001_0101;
+pub const MASK_R_ONLY: u128 = 0x_0202_0200_0200_0200_0200_0200_0200_0202;
 
-const MASK_W_SPHINX: u128 = 0x_0000_0000_0000_0000_0000_0000_0000_0001;
-const MASK_R_SPHINX: u128 = 0x_0200_0000_0000_0000_0000_0000_0000_0000;
+pub const MASK_W_SPHINX: u128 = 0x_0000_0000_0000_0000_0000_0000_0000_0001;
+pub const MASK_R_SPHINX: u128 = 0x_0200_0000_0000_0000_0000_0000_0000_0000;
 
-const MASK_W_OK: u128 = !MASK_R_ONLY & !MASK_W_SPHINX & MASK_BOARD;
-const MASK_R_OK: u128 = !MASK_W_ONLY & !MASK_R_SPHINX & MASK_BOARD;
+pub const MASK_W_OK: u128 = !MASK_R_ONLY & !MASK_W_SPHINX & MASK_BOARD;
+pub const MASK_R_OK: u128 = !MASK_W_ONLY & !MASK_R_SPHINX & MASK_BOARD;
 
-const MASK_TO_MOVE: u128 = 0x_1000_0000_0000_0000_0000_0000_0000_0000;
+pub const MASK_TO_MOVE: u128 = 0x_1000_0000_0000_0000_0000_0000_0000_0000;
 
 const DIR_N: usize = 0;
 const DIR_E: usize = 1;
@@ -135,6 +135,22 @@ fn test_nth_bit() {
     assert_eq!(nth_bit(v, 13), 1 << 114);
 }
 
+struct BitsOf(u128);
+
+impl Iterator for BitsOf {
+    type Item = u128;
+
+    fn next(&mut self) -> Option<u128> {
+        if self.0 == 0 {
+            return None;
+        }
+
+        let m = 1u128 << self.0.trailing_zeros();
+        self.0 &= !m;
+        Some(m)
+    }
+}
+
 struct BitboardPretty(u128);
 
 impl fmt::Debug for BitboardPretty {
@@ -171,19 +187,32 @@ impl fmt::Debug for BitboardRankPretty {
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Board {
-    w: u128,
-    r: u128,
+    pub w: u128,
+    pub r: u128,
 
-    py: u128,
-    sc: u128,
-    an: u128,
-    ph: u128,
+    pub py: u128,
+    pub sc: u128,
+    pub an: u128,
+    pub ph: u128,
 
-    n: u128,
-    e: u128,
+    pub n: u128,
+    pub e: u128,
 }
 
 impl Board {
+    pub fn new_empty() -> Board {
+        Board {
+            w: MASK_TO_MOVE,
+            r: 0,
+            py: 0,
+            sc: 0,
+            an: 0,
+            ph: 0,
+            n: 0,
+            e: 0,
+        }
+    }
+
     pub fn new_classic() -> Board {
         Board {
             w: 0x_1000_0000_0040_0081_00b1_0000_0004_00f1,
@@ -200,13 +229,27 @@ impl Board {
     }
 
     #[inline]
-    pub fn is_terminal(self) -> bool {
+    pub fn white_to_move(&self) -> bool {
+        (self.w & MASK_TO_MOVE) != 0
+    }
+
+    #[inline]
+    pub fn is_terminal(&self) -> bool {
         self.ph.count_ones() != 2
     }
 
     #[inline]
-    pub fn red_wins(self) -> bool {
-        (self.ph & self.w) == 0
+    pub fn white_wins(&self) -> bool {
+        (self.ph & self.r) == 0
+    }
+
+    #[inline]
+    pub fn my_pharaoh(&self) -> u128 {
+        (if self.w & MASK_TO_MOVE != 0 {
+            self.w
+        } else {
+            self.r
+        }) & self.ph
     }
 
     #[inline]
@@ -418,14 +461,105 @@ impl fmt::Debug for Board {
     }
 }
 
+impl fmt::Display for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for row in 0..8 {
+            write!(f, "{}", 8 - row)?;
+
+            for col in 0..10 {
+                let m = 1u128 << ((7 - row) * 16 + (9 - col));
+
+                let x =
+                    0 | (if m & MASK_W_SPHINX != 0 {
+                        0b10000_00
+                    } else {
+                        0
+                    }) | (if m & MASK_R_SPHINX != 0 {
+                        0b10000_00
+                    } else {
+                        0
+                    }) | (if m & self.py != 0 { 0b1000_00 } else { 0 })
+                        | (if m & self.sc != 0 { 0b0100_00 } else { 0 })
+                        | (if m & self.an != 0 { 0b0010_00 } else { 0 })
+                        | (if m & self.ph != 0 { 0b0001_00 } else { 0 })
+                        | (if m & self.n != 0 { 0b0000_10 } else { 0 })
+                        | (if m & self.e != 0 { 0b0000_01 } else { 0 });
+
+                let s = match x {
+                    0b00000_11 => "  ",
+                    0b00000_01 => "  ",
+                    0b00000_00 => "  ",
+                    0b00000_10 => "  ",
+
+                    0b10000_11 => "^ ",
+                    0b10000_01 => "> ",
+                    0b10000_00 => "v ",
+                    0b10000_10 => "< ",
+
+                    0b01000_11 => "^>",
+                    0b01000_01 => "v>",
+                    0b01000_00 => "<v",
+                    0b01000_10 => "<^",
+
+                    0b00100_11 => "\\ ",
+                    0b00100_01 => "/ ",
+                    0b00100_00 => "\\ ",
+                    0b00100_10 => "/ ",
+
+                    0b00010_11 => "A^",
+                    0b00010_01 => "A>",
+                    0b00010_00 => "Av",
+                    0b00010_10 => "<A",
+
+                    0b00001_11 => "P ",
+                    0b00001_01 => "P'",
+                    0b00001_00 => "P ",
+                    0b00001_10 => "P'",
+
+                    _ => "??",
+                };
+
+                let color = if m & self.r != 0 { "1;31" } else { "1" };
+
+                write!(f, " \x1b[{}m{}\x1b[0m", color, s)?;
+            }
+            write!(f, "\n")?;
+        }
+        write!(f, "  a  b  c  d  e  f  g  h  i  j\n")?;
+        write!(
+            f,
+            "  to move: {}",
+            if self.white_to_move() { "WHITE" } else { "RED" }
+        )?;
+
+        Ok(())
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Move {
-    s: u128,
-    d: u128,
-    dd: usize,
+    pub s: u128,
+    pub d: u128,
+    pub dd: usize,
 }
 
 impl Move {
+    fn ith(s: u128, i: usize) -> Move {
+        match i {
+            0 => Move::shl(s, SHL_N),
+            1 => Move::shr(s, SHR_E),
+            2 => Move::shr(s, SHR_S),
+            3 => Move::shl(s, SHL_W),
+            4 => Move::shl(s, SHL_NE),
+            5 => Move::shr(s, SHR_SE),
+            6 => Move::shr(s, SHR_SW),
+            7 => Move::shl(s, SHL_NW),
+            8 => Move::rot(s, 1),
+            9 => Move::rot(s, 3),
+            _ => panic!("invalid value for i: {}", i),
+        }
+    }
+
     fn shl(s: u128, shl: usize) -> Move {
         let d = s << shl;
         Move { s, d, dd: 0 }
@@ -438,6 +572,16 @@ impl Move {
 
     fn rot(s: u128, dd: usize) -> Move {
         Move { s, d: s, dd }
+    }
+}
+
+impl fmt::Debug for Move {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Move")
+            .field("s", &BitboardPretty(self.s))
+            .field("d", &BitboardPretty(self.d))
+            .field("dd", &self.dd)
+            .finish()
     }
 }
 
@@ -458,6 +602,10 @@ impl MoveSet {
         ccw: u128,
     ) -> MoveSet {
         MoveSet([n, e, s, w, ne, se, sw, nw, cw, ccw])
+    }
+
+    pub fn num_moves(&self) -> usize {
+        self.0.iter().map(|x| x.count_ones() as usize).sum()
     }
 
     pub fn rand_move(&self) -> Move {
@@ -496,39 +644,49 @@ impl MoveSet {
             if i < bits[2] {
                 if i < bits[1] {
                     if i < bits[0] {
-                        Move::shl(nth_bit(self.0[0], i), SHL_N)
+                        Move::ith(nth_bit(self.0[0], i), 0)
                     } else {
-                        Move::shr(nth_bit(self.0[1], i - bits[0]), SHR_E)
+                        Move::ith(nth_bit(self.0[1], i - bits[0]), 1)
                     }
                 } else {
-                    Move::shr(nth_bit(self.0[2], i - bits[1]), SHR_S)
+                    Move::ith(nth_bit(self.0[2], i - bits[1]), 2)
                 }
             } else {
                 if i < bits[3] {
-                    Move::shl(nth_bit(self.0[3], i - bits[2]), SHL_W)
+                    Move::ith(nth_bit(self.0[3], i - bits[2]), 3)
                 } else {
-                    Move::shl(nth_bit(self.0[4], i - bits[3]), SHL_NE)
+                    Move::ith(nth_bit(self.0[4], i - bits[3]), 4)
                 }
             }
         } else {
             if i < bits[7] {
                 if i < bits[6] {
                     if i < bits[5] {
-                        Move::shr(nth_bit(self.0[5], i - bits[4]), SHR_SE)
+                        Move::ith(nth_bit(self.0[5], i - bits[4]), 5)
                     } else {
-                        Move::shr(nth_bit(self.0[6], i - bits[5]), SHR_SW)
+                        Move::ith(nth_bit(self.0[6], i - bits[5]), 6)
                     }
                 } else {
-                    Move::shl(nth_bit(self.0[7], i - bits[6]), SHL_NW)
+                    Move::ith(nth_bit(self.0[7], i - bits[6]), 7)
                 }
             } else {
                 if i < bits[8] {
-                    Move::rot(nth_bit(self.0[8], i - bits[7]), 1)
+                    Move::ith(nth_bit(self.0[8], i - bits[7]), 8)
                 } else {
-                    Move::rot(nth_bit(self.0[9], i - bits[8]), 3)
+                    Move::ith(nth_bit(self.0[9], i - bits[8]), 9)
                 }
             }
         }
+    }
+
+    pub fn to_vec(&self) -> Vec<Move> {
+        let mut res = Vec::new();
+        for i in 0..=9 {
+            for x in BitsOf(self.0[i]) {
+                res.push(Move::ith(x, i));
+            }
+        }
+        res
     }
 }
 
@@ -627,7 +785,7 @@ mod tests {
             b.apply_laser_rule();
             b.switch_turn();
             black_box(b.is_terminal());
-            black_box(b.red_wins());
+            black_box(b.white_wins());
         });
     }
 }

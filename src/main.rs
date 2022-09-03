@@ -4,6 +4,7 @@
 #[macro_use]
 extern crate log;
 
+extern crate bumpalo;
 extern crate env_logger;
 extern crate euclid;
 extern crate pixels;
@@ -26,6 +27,7 @@ use rand::seq::SliceRandom;
 
 pub mod bb;
 pub mod board;
+pub mod mcts;
 pub mod model;
 pub mod render;
 
@@ -33,6 +35,7 @@ pub struct TranscriptItem {
     pub move_info: board::MoveInfo,
     pub moved_piece: board::Piece,
     pub taken_piece: Option<board::Piece>,
+    pub value: Option<f64>,
 }
 
 impl TranscriptItem {
@@ -44,6 +47,7 @@ impl TranscriptItem {
             move_info,
             moved_piece: board::Piece::decode(moved).unwrap(),
             taken_piece: board::Piece::decode(taken),
+            value: None,
         }
     }
 }
@@ -137,17 +141,46 @@ impl Transcript {
             } else {
                 if i < self.items.len() as i64 {
                     print!(
-                        " {:3}. {:11}",
+                        " {:3}. {} {:11}",
                         (i / 2) + 1,
+                        TranscriptEval(self.items[i as usize].value),
                         format!("{}", self.items[i as usize])
                     );
                 }
                 if j < self.items.len() as i64 {
-                    println!("  {}", self.items[j as usize]);
+                    println!(
+                        "  {} {}",
+                        self.items[j as usize],
+                        TranscriptEval(self.items[j as usize].value),
+                    );
                 } else {
                     println!();
                 }
             }
+        }
+    }
+}
+
+struct TranscriptEval(Option<f64>);
+
+impl fmt::Display for TranscriptEval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(v) = self.0 {
+            let col = ((v + 1.0) * 10.0) as usize;
+            for i in 0..=20 {
+                if i == col {
+                    write!(f, "O")?
+                } else if i == 10 {
+                    write!(f, "|")?
+                } else if i == 0 || i == 20 {
+                    write!(f, ".")?
+                } else {
+                    write!(f, " ")?
+                }
+            }
+            Ok(())
+        } else {
+            write!(f, ".         |         .")
         }
     }
 }
@@ -298,8 +331,10 @@ impl Display for FischerClock {
 pub trait GamePlayer: Display {
     fn init(&mut self) {}
 
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move;
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove;
 }
+
+type PickedMove = (board::Move, Option<f64>);
 
 struct MctsPlayer<P> {
     policy: P,
@@ -313,7 +348,7 @@ impl<P> MctsPlayer<P> {
 }
 
 impl<P: MctsPolicy + Debug> GamePlayer for MctsPlayer<P> {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
         let print_ival = Duration::from_secs_f64(0.1);
         let turn_duration = Duration::from_secs_f64(
             (clock.incr * 0.9)
@@ -351,7 +386,9 @@ impl<P: MctsPolicy + Debug> GamePlayer for MctsPlayer<P> {
             }
         }
 
-        t.top_move().0
+        let top = t.top_move();
+        let top_value = Some(1.0 - 2.0 * top.1.wins as f64 / top.1.visits as f64);
+        (top.0, top_value)
     }
 }
 
@@ -374,7 +411,7 @@ impl<P> TimeLimitedMctsPlayer<P> {
 }
 
 impl<P: MctsPolicy + Debug> GamePlayer for TimeLimitedMctsPlayer<P> {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
         let print_ival = Duration::from_secs_f64(0.1);
         let turn_duration = self.delay;
 
@@ -404,7 +441,9 @@ impl<P: MctsPolicy + Debug> GamePlayer for TimeLimitedMctsPlayer<P> {
             }
         }
 
-        t.top_move().0
+        let top = t.top_move();
+        let top_value = Some(1.0 - 2.0 * top.1.wins as f64 / top.1.visits as f64);
+        (top.0, top_value)
     }
 }
 
@@ -422,8 +461,8 @@ impl<P: Debug> Display for TimeLimitedMctsPlayer<P> {
 struct RandomPlayer;
 
 impl GamePlayer for RandomPlayer {
-    fn pick_move(&mut self, pos: &board::Position, _clock: &FischerClock) -> board::Move {
-        *pos.moves().choose(&mut rand::thread_rng()).unwrap()
+    fn pick_move(&mut self, pos: &board::Position, _clock: &FischerClock) -> PickedMove {
+        (*pos.moves().choose(&mut rand::thread_rng()).unwrap(), None)
     }
 }
 
@@ -436,20 +475,21 @@ impl Display for RandomPlayer {
 struct TimeLimitedAlphaBetaPlayerEvalMaterial;
 
 impl GamePlayer for TimeLimitedAlphaBetaPlayerEvalMaterial {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
         let turn_duration = Duration::from_secs_f64(
             (clock.incr * 0.8)
                 .max(clock.my_remaining() * 0.2)
                 .min(clock.my_remaining() * 0.8),
         );
-        alpha_beta(
+        let m = alpha_beta(
             &clock,
             pos.clone(),
             board::TreeTimeLimit::from(turn_duration),
             &board::eval_material,
         )
         .get_move()
-        .unwrap()
+        .unwrap();
+        (m, None)
     }
 }
 
@@ -462,20 +502,21 @@ impl Display for TimeLimitedAlphaBetaPlayerEvalMaterial {
 struct TimeLimitedV1AlphaBetaPlayerEvalMaterial;
 
 impl GamePlayer for TimeLimitedV1AlphaBetaPlayerEvalMaterial {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
         let turn_duration = Duration::from_secs_f64(
             (clock.incr * 0.8)
                 .max(clock.my_remaining() * 0.2)
                 .min(clock.my_remaining() * 0.8),
         );
-        alpha_beta(
+        let m = alpha_beta(
             &clock,
             pos.clone(),
             board::TreeTimeLimitV1::from(turn_duration),
             &board::eval_material,
         )
         .get_move()
-        .unwrap()
+        .unwrap();
+        (m, None)
     }
 }
 
@@ -488,20 +529,21 @@ impl Display for TimeLimitedV1AlphaBetaPlayerEvalMaterial {
 struct TimeLimitedAlphaBetaPlayerEvalLaser;
 
 impl GamePlayer for TimeLimitedAlphaBetaPlayerEvalLaser {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
         let turn_duration = Duration::from_secs_f64(
             (clock.incr * 0.8)
                 .max(clock.my_remaining() * 0.2)
                 .min(clock.my_remaining() * 0.8),
         );
-        alpha_beta(
+        let m = alpha_beta(
             &clock,
             pos.clone(),
             board::TreeTimeLimit::from(turn_duration),
             &board::eval_laser,
         )
         .get_move()
-        .unwrap()
+        .unwrap();
+        (m, None)
     }
 }
 
@@ -514,15 +556,16 @@ impl Display for TimeLimitedAlphaBetaPlayerEvalLaser {
 struct DepthLimitedAlphaBetaPlayerEvalMaterial(usize);
 
 impl GamePlayer for DepthLimitedAlphaBetaPlayerEvalMaterial {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
-        alpha_beta(
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+        let m = alpha_beta(
             &clock,
             pos.clone(),
             board::TreeDepthLimit::new(self.0),
             &board::eval_material,
         )
         .get_move()
-        .unwrap()
+        .unwrap();
+        (m, None)
     }
 }
 
@@ -535,21 +578,160 @@ impl Display for DepthLimitedAlphaBetaPlayerEvalMaterial {
 struct DepthLimitedAlphaBetaPlayerEvalLaser(usize);
 
 impl GamePlayer for DepthLimitedAlphaBetaPlayerEvalLaser {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
-        alpha_beta(
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+        let m = alpha_beta(
             &clock,
             pos.clone(),
             board::TreeDepthLimit::new(self.0),
             &board::eval_laser,
         )
         .get_move()
-        .unwrap()
+        .unwrap();
+        (m, None)
     }
 }
 
 impl Display for DepthLimitedAlphaBetaPlayerEvalLaser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "alpha-beta(eval_laser, D={})", self.0)
+    }
+}
+
+struct NewMctsPlayer;
+
+impl GamePlayer for NewMctsPlayer {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+        let turn_duration = Duration::from_secs_f64(
+            (clock.incr * 0.8)
+                .max(clock.my_remaining() * 0.2)
+                .min(clock.my_remaining() * 0.8),
+        );
+        let budget = mcts::Resources::new()
+            .limit_time(turn_duration)
+            .limit_bytes(1_000_000_000)
+            .limit_top_confidence(0.4);
+
+        let board = {
+            let mut board = bb::Board::new_empty();
+
+            if pos.to_move() == board::Color::Red {
+                board.w ^= bb::MASK_TO_MOVE;
+                board.r ^= bb::MASK_TO_MOVE;
+            }
+
+            for (row, row_data) in pos.describe().iter().enumerate() {
+                for (col, cell) in row_data.iter().enumerate() {
+                    let m = 1u128 << ((7 - row) * 16 + (9 - col));
+
+                    if let Some(x) = cell {
+                        match x.role {
+                            board::Role::Pyramid => board.py |= m,
+                            board::Role::Scarab => board.sc |= m,
+                            board::Role::Anubis => board.an |= m,
+                            board::Role::Sphinx => {}
+                            board::Role::Pharaoh => board.ph |= m,
+                        }
+
+                        match x.color {
+                            board::Color::White => board.w |= m,
+                            board::Color::Red => board.r |= m,
+                        }
+
+                        match x.dir {
+                            board::Direction::North => {
+                                board.n |= m;
+                                board.e |= m;
+                            }
+                            board::Direction::East => {
+                                board.e |= m;
+                            }
+                            board::Direction::South => {}
+                            board::Direction::West => {
+                                board.n |= m;
+                            }
+                        }
+                    }
+                }
+            }
+
+            board
+        };
+
+        let (m, m_stats) = mcts::search(
+            board,
+            &budget,
+            1.0,
+            &mcts::smart_rollout,
+            NewMctsPlayerReporter::new(clock),
+        );
+
+        let sr = 7 - (m.s.trailing_zeros() / 16) as usize;
+        let sc = 9 - (m.s.trailing_zeros() % 16) as usize;
+        let dr = 7 - (m.d.trailing_zeros() / 16) as usize;
+        let dc = 9 - (m.d.trailing_zeros() % 16) as usize;
+
+        let old_m = board::Move {
+            sx: sr * 10 + sc,
+            dx: dr * 10 + dc,
+            ddir: m.dd as u8,
+        };
+
+        (old_m, Some(m_stats.top_move_value))
+    }
+}
+
+impl Display for NewMctsPlayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "bb-mcts()")
+    }
+}
+
+struct Bytes(usize);
+
+impl Display for Bytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 > 1 << 29 {
+            write!(f, "{:.1}G", self.0 as f64 / (1 << 30) as f64)
+        } else if self.0 > 1 << 19 {
+            write!(f, "{:.1}M", self.0 as f64 / (1 << 20) as f64)
+        } else if self.0 > 1 << 9 {
+            write!(f, "{:.1}k", self.0 as f64 / (1 << 10) as f64)
+        } else {
+            write!(f, "{}B", self.0)
+        }
+    }
+}
+
+struct NewMctsPlayerReporter<'a> {
+    clock: &'a FischerClock,
+    last_print: Instant,
+}
+
+impl<'a> NewMctsPlayerReporter<'a> {
+    fn new(clock: &'a FischerClock) -> NewMctsPlayerReporter<'a> {
+        NewMctsPlayerReporter {
+            clock,
+            last_print: Instant::now(),
+        }
+    }
+}
+
+impl<'a> mcts::StatsSink for NewMctsPlayerReporter<'a> {
+    fn report(&mut self, stats: &mcts::Stats) -> () {
+        if self.last_print.elapsed().as_millis() > 100 {
+            print!(
+                "\x1b[G\x1b[K{} value={:+.3} {:+.3} tv={:.3} tc={:.3} {:8.1}iter/sec sz={}",
+                self.clock,
+                stats.root_value,
+                stats.top_move_value - stats.root_value,
+                stats.top_move_visits as f64 / stats.root_visits as f64,
+                stats.top_confidence,
+                stats.root_visits as f64 / stats.time.as_secs_f64(),
+                Bytes(stats.bytes)
+            );
+            stdout().lock().flush().unwrap();
+            self.last_print = Instant::now();
+        }
     }
 }
 
@@ -645,7 +827,7 @@ impl StdinPlayer {
 }
 
 impl GamePlayer for StdinPlayer {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> board::Move {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
         println!("{} move like 'a6 nw' or 'j1 ccw' (no quotes)", clock);
         loop {
             print!("move> ");
@@ -665,7 +847,7 @@ impl GamePlayer for StdinPlayer {
             if !pos.moves().iter().any(|x| m == *x) {
                 println!("{} invalid move", clock);
             } else {
-                return m;
+                return (m, None);
             }
         }
     }
@@ -728,7 +910,7 @@ fn run_game(
             return GameResult::Draw;
         }
 
-        let m = match pos.to_move() {
+        let (m, m_value) = match pos.to_move() {
             board::Color::White => white.pick_move(&pos, &clock),
             board::Color::Red => red.pick_move(&pos, &clock),
         };
@@ -737,7 +919,11 @@ fn run_game(
             println!();
             return GameResult::winner(loser.opp());
         }
-        log.items.push(TranscriptItem::new(&pos, m));
+        log.items.push({
+            let mut item = TranscriptItem::new(&pos, m);
+            item.value = m_value;
+            item
+        });
         pos.apply_move(m);
     }
 }
@@ -954,24 +1140,78 @@ impl fmt::Display for CompareResults {
     }
 }
 
+struct PeriodicReporter {
+    board: bb::Board,
+    last_print: Instant,
+}
+
+impl PeriodicReporter {
+    fn new(board: bb::Board) -> PeriodicReporter {
+        PeriodicReporter {
+            board,
+            last_print: Instant::now(),
+        }
+    }
+}
+
+impl mcts::StatsSink for PeriodicReporter {
+    fn report(&mut self, stats: &mcts::Stats) -> () {
+        if self.last_print.elapsed().as_millis() > 100 {
+            let s = format!(
+                "value={:+.3} {:+.3} tv={:.3} {:8.1}iter/sec",
+                stats.root_value,
+                stats.top_move_value - stats.root_value,
+                stats.top_move_visits as f64 / stats.root_visits as f64,
+                stats.root_visits as f64 / stats.time.as_secs_f64()
+            );
+            let mut next = self.board;
+            next.apply_move(stats.top_move);
+            let s = format!(
+                "\x1b[H\x1b[J{}\n\n{}\n\n{}\n\n{:#?}",
+                self.board, s, next, stats
+            );
+            stdout().lock().write(s.as_bytes()).unwrap();
+            stdout().lock().flush().unwrap();
+            self.last_print = Instant::now();
+        }
+    }
+}
+
+#[allow(unused)]
+fn new_mcts_main() {
+    loop {
+        let mut board = bb::Board::new_classic();
+        while !board.is_terminal() {
+            let budget = mcts::Resources::new()
+                .limit_time(Duration::from_secs(20))
+                .limit_bytes(1_000_000_000);
+            let (m, _) = mcts::search(
+                board,
+                &budget,
+                1.0,
+                &mcts::smart_rollout,
+                PeriodicReporter::new(board),
+            );
+            board.apply_move(m);
+            board.apply_laser_rule();
+            board.switch_turn();
+        }
+        println!();
+        println!();
+        println!("{}", board);
+        thread::sleep(Duration::from_secs(2));
+    }
+}
+
 fn main() {
     env_logger::init();
 
-    /*
     let mut compare = Comparator::new(
+        || NewMctsPlayer,
         || MctsPlayer::new(board::BacktrackRollout::new(1.0)),
-        || MctsPlayer::new(board::BacktrackRollout::bugged(1.0)),
-        1.5,
-        1.5,
-        1.5,
-    );
-    */
-    let mut compare = Comparator::new(
-        || TimeLimitedAlphaBetaPlayerEvalMaterial,
-        || MctsPlayer::new(board::BacktrackRollout::new(1.0)),
-        30.0,
-        30.0,
-        30.0,
+        10.0,
+        10.0,
+        10.0,
     );
 
     loop {
