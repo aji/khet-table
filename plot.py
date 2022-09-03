@@ -59,9 +59,9 @@ def gradient(x):
 
 # normal colors
 def gradient_negative(x):
-    return 0.1 + 0.8 * x, 0.1 + 0.1 * x, 0.1 - 0.1 * x
+    return 0.1 + 0.8 * x * x, 0.1 + 0.1 * x, 0.1 - 0.1 * x
 def gradient_positive(x):
-    return 0.1, 0.1 + 0.9 * x, 0.1 + 0.4 * x
+    return 0.1, 0.1 + 0.9 * x * x, 0.1 + 0.4 * x
 
 def put_board(board):
     print('<svg viewbox="0 0 200 160" width="200" height="160">')
