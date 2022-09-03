@@ -6,15 +6,15 @@ extern crate log;
 
 extern crate bumpalo;
 extern crate env_logger;
-extern crate euclid;
-extern crate pixels;
-extern crate raqote;
+//extern crate euclid;
+//extern crate pixels;
+//extern crate raqote;
 extern crate rayon;
-extern crate serde;
-extern crate serde_json;
+//extern crate serde;
+//extern crate serde_json;
 extern crate test;
 extern crate typed_arena;
-extern crate winit;
+//extern crate winit;
 
 use std::{
     fmt::{self, Debug, Display},
@@ -31,7 +31,7 @@ pub mod board;
 pub mod learn;
 pub mod mcts;
 pub mod model;
-pub mod render;
+//pub mod render;
 
 pub struct TranscriptItem {
     pub move_info: board::MoveInfo,

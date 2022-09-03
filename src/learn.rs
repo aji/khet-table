@@ -1,3 +1,4 @@
+use std::fs::OpenOptions;
 use std::io::{stdout, BufRead, BufReader, Write};
 use std::{fs::File, sync::atomic::AtomicUsize};
 
@@ -8,9 +9,9 @@ use crate::{
     model::{Grad, LinearModel, Model},
 };
 
-const PER_EPOCH: usize = 500;
-const TREE_LIMIT: usize = 1000;
-const LR_INIT: f64 = 0.0002;
+const PER_EPOCH: usize = 200;
+const TREE_LIMIT: usize = 5000;
+const LR_INIT: f64 = 0.0004;
 const LR_INTERVAL: usize = usize::MAX;
 const LR_AMOUNT: f64 = 0.4;
 
@@ -258,5 +259,13 @@ pub fn learn_main() {
         for w in learn.model.weights() {
             write!(file, "{}\n", w).unwrap();
         }
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open("losses.txt")
+            .unwrap();
+        write!(file, "{}\n", avg_loss).unwrap();
     }
 }
