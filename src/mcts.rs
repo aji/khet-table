@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use bumpalo::{collections::Vec, Bump};
-use rand::seq::SliceRandom;
 use rayon::prelude::*;
 
 use crate::bb;
@@ -137,7 +136,7 @@ struct Node<'alo> {
 }
 
 pub fn search<R: Rollout, S: StatsSink>(
-    board: bb::Board,
+    board: &bb::Board,
     budget: &Resources,
     explore: f64,
     rollout: &R,
@@ -168,9 +167,9 @@ pub fn search<R: Rollout, S: StatsSink>(
     };
 
     let mut root = {
-        let children = gen_children_in(&board, rollout, &bump);
+        let children = gen_children_in(board, &root_moves[..], rollout, &bump);
         Node {
-            board,
+            board: board.clone(),
             score: Score::aggregate(&children),
             children: Some(children),
         }
@@ -234,7 +233,8 @@ impl<'alo> Node<'alo> {
             children[top].expand_in(explore, rollout, bump);
             children
         } else {
-            gen_children_in(&self.board, rollout, bump)
+            let moves = self.board.movegen().to_vec();
+            gen_children_in(&self.board, &moves[..], rollout, bump)
         };
 
         self.score = Score::aggregate(&children);
@@ -263,15 +263,10 @@ fn calc_initial_score<R: Rollout>(board: &bb::Board, rollout: &R) -> Score {
 
 fn gen_children_in<'alo, R: Rollout>(
     board: &bb::Board,
+    moves: &[bb::Move],
     rollout: &R,
     bump: &'alo Bump,
 ) -> Vec<'alo, Node<'alo>> {
-    let moves = {
-        let mut moves = board.movegen().to_vec();
-        moves.shuffle(&mut rand::thread_rng());
-        moves
-    };
-
     let mut children = Vec::with_capacity_in(moves.len(), bump);
     let mut rollouts: std::vec::Vec<(bb::Board, Score)> = std::vec::Vec::with_capacity(moves.len());
 
@@ -390,7 +385,7 @@ mod tests {
         b.iter(|| {
             let budget = mcts::Resources::new().limit_tree_size(1000);
             let m = mcts::search(
-                board,
+                &board,
                 &budget,
                 1.0,
                 &mcts::traditional_rollout,

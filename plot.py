@@ -4,7 +4,7 @@ weights_in = [float(x.strip()) for x in open('weights.txt')]
 max_abs = max(abs(x) for x in weights_in)
 weights = [0 for x in range(640)]
 
-window_size = 100
+window_size = 2
 input_losses = [float(x.strip()) for x in open('losses.txt') if not x.startswith('--')]
 losses = [sum(input_losses[i:i+window_size])/window_size
     for i in range(len(input_losses) - window_size)]
@@ -59,9 +59,9 @@ def gradient(x):
 
 # normal colors
 def gradient_negative(x):
-    return 0.1 + 0.8 * x * x, 0.1 + 0.1 * x, 0.1 - 0.1 * x
+    return 0.05 + 0.95 * x ** 0.7, 0.05 + 0.1 * x, 0.05 - 0.05 * x
 def gradient_positive(x):
-    return 0.1, 0.1 + 0.9 * x * x, 0.1 + 0.4 * x
+    return 0.05, 0.05 + 0.95 * x ** 0.7, 0.05 + 0.4 * x
 
 def put_board(board):
     print('<svg viewbox="0 0 200 160" width="200" height="160">')
@@ -97,8 +97,8 @@ print('</tbody>')
 print('</table>')
 
 print('<div style="margin: 80px">')
-min_loss = min(min(losses), 0.8)
-max_loss = max(max(losses), 1.0)
+min_loss = min(min(losses), 0.0)
+max_loss = max(max(losses), 0.1)
 print('<svg viewbox="0 0 800 400" width="800" height="400">')
 def plot(i, loss):
     x = 5 + 790 * i / len(losses)
@@ -107,7 +107,7 @@ def plot(i, loss):
 for i in range(40):
     loss = i / 20.
     print('''<path
-        fill="non"
+        fill="none"
         stroke="rgb({color}%, {color}%, {color}%)"
         stroke-width="1"
         stroke-linecap="round"
@@ -117,7 +117,7 @@ for i in range(40):
         />'''.format(
             y = plot(0, loss)[1],
             color = 40 if i % 20 != 0 else 70,
-            dashes = 'stroke-dasharray="2 2"' if i % 20 != 0 else ''
+            dashes = 'stroke-dasharray="5 5"' if i % 20 != 0 else ''
         ))
 print('''<path
     fill="none"

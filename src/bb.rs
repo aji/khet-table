@@ -304,8 +304,8 @@ impl Board {
             p & (p_ok << SHR_SE) | sc & (sc_ok << SHR_SE),
             p & (p_ok << SHR_SW) | sc & (sc_ok << SHR_SW),
             p & (p_ok >> SHL_NW) | sc & (sc_ok >> SHL_NW),
-            cw | (MASK_W_SPHINX & to_move & !self.e) | (MASK_R_SPHINX & to_move & !self.n),
-            ccw | (MASK_W_SPHINX & to_move & self.e) | (MASK_R_SPHINX & to_move & self.n),
+            cw | (MASK_W_SPHINX & to_move & !self.e) | (MASK_R_SPHINX & to_move & self.e),
+            ccw | (MASK_W_SPHINX & to_move & self.e) | (MASK_R_SPHINX & to_move & !self.e),
         )
     }
 

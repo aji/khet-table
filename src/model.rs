@@ -19,6 +19,7 @@ pub trait Model<Input> {
     fn apply_grad(&mut self, grad: Self::Grad);
 }
 
+#[derive(Clone)]
 pub struct LinearModel {
     w: Vec<f64>,
 }
@@ -38,6 +39,18 @@ impl LinearModel {
 
     pub fn weights_mut(&mut self) -> &mut [f64] {
         &mut self.w[..]
+    }
+}
+
+impl<W> From<W> for LinearModel
+where
+    W: AsRef<[f64]>,
+{
+    fn from(weights_in: W) -> LinearModel {
+        let weights = weights_in.as_ref();
+        let mut model = LinearModel::new(weights.len());
+        model.weights_mut().copy_from_slice(weights);
+        model
     }
 }
 
