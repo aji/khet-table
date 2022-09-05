@@ -19,6 +19,10 @@ extern crate typed_arena;
 use std::{
     fmt::{self, Debug, Display},
     io::{stdout, Write},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -543,6 +547,40 @@ impl GamePlayer for NewMctsPlayer {
 impl Display for NewMctsPlayer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "bb-mcts({:.1})", self.explore)
+    }
+}
+
+struct TimeLimitedNewMctsPlayer {
+    turn_duration: Duration,
+}
+
+impl TimeLimitedNewMctsPlayer {
+    fn new(turn_duration: Duration) -> TimeLimitedNewMctsPlayer {
+        TimeLimitedNewMctsPlayer { turn_duration }
+    }
+}
+
+impl GamePlayer for TimeLimitedNewMctsPlayer {
+    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+        let budget = mcts::Resources::new()
+            .limit_time(self.turn_duration)
+            .limit_bytes(2_000_000_000)
+            .limit_top_confidence(0.9);
+
+        let (m, m_stats) = mcts::search(
+            &old_board_to_new_board(pos),
+            &budget,
+            1.0,
+            &mcts::traditional_rollout,
+            NewMctsPlayerReporter::new(clock),
+        );
+        (new_move_to_old_move(m), Some(m_stats.top_move_value))
+    }
+}
+
+impl Display for TimeLimitedNewMctsPlayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "bb-mcts({:?})", self.turn_duration)
     }
 }
 
@@ -1129,11 +1167,8 @@ fn play_main() {
 
     let res = run_game(
         "",
-        board::Position::new_tmp(),
-        &mut TimeLimitedMctsPlayer::new(
-            Duration::from_secs_f64(10.),
-            board::BacktrackRollout::new(1.0),
-        ),
+        board::Position::new_classic(),
+        &mut TimeLimitedNewMctsPlayer::new(Duration::from_secs(5)),
         &mut StdinPlayer,
         Duration::from_secs(3600),
         Duration::from_secs(3600),
@@ -1152,9 +1187,9 @@ fn league_main() {
     env_logger::init();
 
     let mut league = League::new(
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        Duration::from_secs(1),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
     );
 
     //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(2));
@@ -1166,10 +1201,15 @@ fn league_main() {
     //league.add_player(TimeLimitedAlphaBetaPlayerEvalMaterial);
     //league.add_player(TimeLimitedV1AlphaBetaPlayerEvalMaterial);
     //league.add_player(TimeLimitedAlphaBetaPlayerEvalLaser);
-    league.add_player(MctsPlayer::new(board::BacktrackRollout::new(1.0)));
-    league.add_player(NewMctsPlayer::new(1.0));
-    league.add_player(LinearAgentPlayer::new("v1", weights::WEIGHTS_V1));
-    league.add_player(LinearAgentPlayer::new("v2", weights::WEIGHTS_V2));
+    //league.add_player(MctsPlayer::new(board::BacktrackRollout::new(1.0)));
+    //league.add_player(NewMctsPlayer::new(1.0));
+    league.add_player(TimeLimitedNewMctsPlayer::new(Duration::from_millis(400)));
+    league.add_player(TimeLimitedNewMctsPlayer::new(Duration::from_millis(800)));
+    league.add_player(TimeLimitedNewMctsPlayer::new(Duration::from_millis(1200)));
+    league.add_player(TimeLimitedNewMctsPlayer::new(Duration::from_millis(1600)));
+    league.add_player(TimeLimitedNewMctsPlayer::new(Duration::from_millis(2000)));
+    //league.add_player(LinearAgentPlayer::new("v1", weights::WEIGHTS_V1));
+    //league.add_player(LinearAgentPlayer::new("v2", weights::WEIGHTS_V2));
     //league.add_player(MctsPlayer::new(board::CoinTossRollout));
 
     loop {
@@ -1182,8 +1222,35 @@ fn league_main() {
     }
 }
 
+#[allow(unused)]
+fn clock_main() {
+    env_logger::init();
+
+    let (tx, rx) = mpsc::channel::<()>();
+
+    thread::spawn(move || loop {
+        let mut buffer = String::new();
+        std::io::stdin().read_line(&mut buffer).unwrap();
+        tx.send(()).unwrap();
+    });
+
+    let mut clock = FischerClock::new(
+        Duration::from_secs(3600),
+        Duration::ZERO,
+        Duration::from_secs(3600),
+    );
+
+    while clock.over_time().is_none() {
+        print!("\x1b[G\x1b[K{}", clock);
+        std::io::stdout().flush().unwrap();
+        if let Ok(_) = rx.recv_timeout(Duration::from_millis(10)) {
+            clock.flip();
+        }
+    }
+}
+
 fn main() {
-    league_main()
+    league_main();
 }
 
 /*

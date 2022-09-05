@@ -162,8 +162,8 @@ where
 
 pub fn compare_main() {
     let results = compare(
-        MctsMoveSelector::new(learn::LinearModelAgent::new(weights::WEIGHTS_V2)),
-        MctsMoveSelector::new(learn::LinearModelAgent::new(weights::WEIGHTS_V1)),
+        MctsMoveSelector::new(&mcts::smart_rollout),
+        MctsMoveSelector::new(&mcts::traditional_rollout),
         100,
         Duration::from_secs(1),
         100,

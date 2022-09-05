@@ -258,7 +258,7 @@ impl Board {
                 ddir: 1,
             });
         }
-        if (src & CR_MASK) == CR_PYRAMID {
+        if (src & CR_MASK) == CR_PYRAMID || (src & CR_MASK) == CR_ANUBIS {
             moves.push(Move {
                 sx,
                 dx: sx,
