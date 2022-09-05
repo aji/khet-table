@@ -229,7 +229,7 @@ impl<'alo> Node<'alo> {
         rollout: &R,
         bump: &'alo Bump,
     ) {
-        if game.would_draw(&self.board) || self.board.is_terminal() {
+        if game.outcome().is_some() {
             self.score.visits += 1;
             return;
         }
@@ -363,14 +363,14 @@ impl Score {
         I::Item: HasScore,
     {
         let total_visits = children.into_iter().map(|d| d.score().visits).sum();
-        let total_weighted_value: f64 = children
+        let total_wins: f64 = children
             .into_iter()
-            .map(|d| d.score().value * d.score().visits as f64)
+            .map(|d| (d.score().value + 1.0) * d.score().visits as f64 / 2.0)
             .sum();
         let max_depth = children.into_iter().map(|d| d.score().depth).max().unwrap();
 
         Score {
-            value: total_weighted_value / total_visits as f64,
+            value: 2.0 * total_wins / total_visits as f64 - 1.0,
             visits: total_visits,
             depth: max_depth + 1,
         }
