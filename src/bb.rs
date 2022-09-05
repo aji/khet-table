@@ -185,7 +185,7 @@ impl fmt::Debug for BitboardRankPretty {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone)]
 pub struct Board {
     pub w: u128,
     pub r: u128,
@@ -310,7 +310,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn apply_move(&mut self, m: Move) {
+    pub fn apply_move(&mut self, m: &Move) {
         match m.dd {
             0 => {
                 self.w = swap_bits(self.w, m.s, m.d);
@@ -459,6 +459,15 @@ impl Board {
         self.w ^= MASK_TO_MOVE;
         self.r ^= MASK_TO_MOVE;
     }
+
+    pub fn normalize(&mut self) {
+        let p = self.py | self.sc | self.an | self.ph;
+
+        self.w &= p | MASK_TO_MOVE;
+        self.r &= p | MASK_TO_MOVE;
+        self.n &= p | MASK_W_SPHINX | MASK_R_SPHINX;
+        self.e &= p | MASK_W_SPHINX | MASK_R_SPHINX;
+    }
 }
 
 impl fmt::Debug for Board {
@@ -550,6 +559,18 @@ impl fmt::Display for Board {
         Ok(())
     }
 }
+
+impl PartialEq for Board {
+    fn eq(&self, other: &Self) -> bool {
+        let mut a = self.clone();
+        let mut b = other.clone();
+        a.normalize();
+        b.normalize();
+        (a.w, a.r, a.py, a.sc, a.an, a.ph, a.n, a.e) == (b.w, b.r, b.py, b.sc, b.an, b.ph, b.n, b.e)
+    }
+}
+
+impl Eq for Board {}
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Move {
@@ -722,6 +743,100 @@ impl fmt::Debug for MoveSet {
     }
 }
 
+#[derive(Clone)]
+pub struct Game {
+    history: Vec<Board>,
+}
+
+impl Game {
+    pub fn new(initial: Board) -> Game {
+        Game {
+            history: vec![initial],
+        }
+    }
+
+    pub fn count_seen(&self, board: &Board) -> usize {
+        self.history.iter().filter(|b| *b == board).count()
+    }
+
+    pub fn would_draw(&self, board: &Board) -> bool {
+        self.count_seen(board) >= 2
+    }
+
+    pub fn latest(&self) -> &Board {
+        &self.history[self.history.len() - 1]
+    }
+
+    pub fn history(&self) -> &[Board] {
+        &self.history
+    }
+
+    pub fn peek_move(&self, m: &Move) -> Board {
+        let mut b = self.latest().clone();
+        b.apply_move(m);
+        b.apply_laser_rule();
+        b.switch_turn();
+        b
+    }
+
+    pub fn truncate(&mut self, len: usize) -> () {
+        assert!(len > 0);
+        self.history.truncate(len);
+    }
+
+    pub fn add_board(&mut self, board: Board) -> () {
+        self.history.push(board);
+    }
+
+    pub fn add_move(&mut self, m: &Move) -> &Board {
+        self.add_board(self.peek_move(m));
+        self.latest()
+    }
+
+    pub fn outcome(&self) -> Option<GameOutcome> {
+        let board = self.latest();
+        if self.count_seen(board) >= 3 {
+            Some(GameOutcome::Draw)
+        } else if board.is_terminal() {
+            if board.white_wins() {
+                Some(GameOutcome::WhiteWins)
+            } else {
+                Some(GameOutcome::RedWins)
+            }
+        } else {
+            None
+        }
+    }
+}
+
+pub enum GameOutcome {
+    Draw,
+    WhiteWins,
+    RedWins,
+}
+
+impl GameOutcome {
+    pub fn value(&self) -> f64 {
+        match self {
+            GameOutcome::Draw => 0.0,
+            GameOutcome::WhiteWins => 1.0,
+            GameOutcome::RedWins => -1.0,
+        }
+    }
+
+    pub fn white_score(&self) -> f64 {
+        match self {
+            GameOutcome::Draw => 0.5,
+            GameOutcome::WhiteWins => 1.0,
+            GameOutcome::RedWins => 0.0,
+        }
+    }
+
+    pub fn red_score(&self) -> f64 {
+        1.0 - self.white_score()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use test::{black_box, Bencher};
@@ -777,8 +892,6 @@ mod tests {
         assert_eq!(kill, 0x_0000_0000_0000_0000_0001_0000_0000_0000);
     }
 
-    /*
-    test is bugged because equality on boards is bugged
     #[test]
     fn test_flip_and_rotate() {
         let expected = Board::new_classic();
@@ -789,7 +902,6 @@ mod tests {
             expected, actual
         );
     }
-    */
 
     #[bench]
     fn bench_movegen_rand_move(b: &mut Bencher) {
@@ -810,7 +922,7 @@ mod tests {
         let board = Board::new_classic();
         b.iter(|| {
             let mut b = board;
-            b.apply_move(b.movegen().rand_move());
+            b.apply_move(&b.movegen().rand_move());
             b.apply_laser_rule();
             b.switch_turn();
             black_box(b.is_terminal());

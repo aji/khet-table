@@ -4,6 +4,7 @@
 #[macro_use]
 extern crate log;
 
+extern crate autograd;
 extern crate bumpalo;
 extern crate env_logger;
 //extern crate euclid;
@@ -168,6 +169,20 @@ impl Transcript {
     }
 }
 
+struct Game(Vec<board::Position>);
+
+impl Game {
+    fn pos(&self) -> &board::Position {
+        &self.0[self.0.len() - 1]
+    }
+
+    fn apply_move(&mut self, m: &board::Move) {
+        let mut next = self.pos().clone();
+        next.apply_move(*m);
+        self.0.push(next);
+    }
+}
+
 struct TranscriptEval(Option<f64>);
 
 impl fmt::Display for TranscriptEval {
@@ -192,10 +207,10 @@ impl fmt::Display for TranscriptEval {
     }
 }
 
-pub trait GamePlayer: Display {
+trait GamePlayer: Display {
     fn init(&mut self) {}
 
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove;
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove;
 }
 
 type PickedMove = (board::Move, Option<f64>);
@@ -218,13 +233,13 @@ fn suggested_turn_duration(clock: &FischerClock) -> Duration {
 }
 
 impl<P: MctsPolicy + Debug> GamePlayer for MctsPlayer<P> {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let print_ival = Duration::from_secs_f64(0.1);
         let turn_duration = suggested_turn_duration(clock);
         let top_thresh = (turn_duration.as_secs_f64() * 1200.) as isize;
 
         let arena = typed_arena::Arena::new();
-        let mut t = board::MctsTree::new(pos.clone(), &arena);
+        let mut t = board::MctsTree::new(game.pos().clone(), &arena);
         let mut last_printed = Instant::now();
 
         while clock.my_elapsed() < turn_duration {
@@ -277,12 +292,12 @@ impl<P> TimeLimitedMctsPlayer<P> {
 }
 
 impl<P: MctsPolicy + Debug> GamePlayer for TimeLimitedMctsPlayer<P> {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let print_ival = Duration::from_secs_f64(0.1);
         let turn_duration = self.delay;
 
         let arena = typed_arena::Arena::new();
-        let mut t = board::MctsTree::new(pos.clone(), &arena);
+        let mut t = board::MctsTree::new(game.pos().clone(), &arena);
         let mut last_printed = Instant::now();
 
         while clock.my_elapsed() < turn_duration {
@@ -327,8 +342,9 @@ impl<P: Debug> Display for TimeLimitedMctsPlayer<P> {
 struct RandomPlayer;
 
 impl GamePlayer for RandomPlayer {
-    fn pick_move(&mut self, pos: &board::Position, _clock: &FischerClock) -> PickedMove {
-        (*pos.moves().choose(&mut rand::thread_rng()).unwrap(), None)
+    fn pick_move(&mut self, game: &Game, _clock: &FischerClock) -> PickedMove {
+        let m = *game.pos().moves().choose(&mut rand::thread_rng()).unwrap();
+        (m, None)
     }
 }
 
@@ -341,11 +357,11 @@ impl Display for RandomPlayer {
 struct TimeLimitedAlphaBetaPlayerEvalMaterial;
 
 impl GamePlayer for TimeLimitedAlphaBetaPlayerEvalMaterial {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let turn_duration = suggested_turn_duration(clock);
         let m = alpha_beta(
             &clock,
-            pos.clone(),
+            game.pos().clone(),
             board::TreeTimeLimit::from(turn_duration),
             &board::eval_material,
         )
@@ -364,11 +380,11 @@ impl Display for TimeLimitedAlphaBetaPlayerEvalMaterial {
 struct TimeLimitedV1AlphaBetaPlayerEvalMaterial;
 
 impl GamePlayer for TimeLimitedV1AlphaBetaPlayerEvalMaterial {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let turn_duration = suggested_turn_duration(clock);
         let m = alpha_beta(
             &clock,
-            pos.clone(),
+            game.pos().clone(),
             board::TreeTimeLimitV1::from(turn_duration),
             &board::eval_material,
         )
@@ -387,11 +403,11 @@ impl Display for TimeLimitedV1AlphaBetaPlayerEvalMaterial {
 struct TimeLimitedAlphaBetaPlayerEvalLaser;
 
 impl GamePlayer for TimeLimitedAlphaBetaPlayerEvalLaser {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let turn_duration = suggested_turn_duration(clock);
         let m = alpha_beta(
             &clock,
-            pos.clone(),
+            game.pos().clone(),
             board::TreeTimeLimit::from(turn_duration),
             &board::eval_laser,
         )
@@ -410,10 +426,10 @@ impl Display for TimeLimitedAlphaBetaPlayerEvalLaser {
 struct DepthLimitedAlphaBetaPlayerEvalMaterial(usize);
 
 impl GamePlayer for DepthLimitedAlphaBetaPlayerEvalMaterial {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let m = alpha_beta(
             &clock,
-            pos.clone(),
+            game.pos().clone(),
             board::TreeDepthLimit::new(self.0),
             &board::eval_material,
         )
@@ -432,10 +448,10 @@ impl Display for DepthLimitedAlphaBetaPlayerEvalMaterial {
 struct DepthLimitedAlphaBetaPlayerEvalLaser(usize);
 
 impl GamePlayer for DepthLimitedAlphaBetaPlayerEvalLaser {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let m = alpha_beta(
             &clock,
-            pos.clone(),
+            game.pos().clone(),
             board::TreeDepthLimit::new(self.0),
             &board::eval_laser,
         )
@@ -497,6 +513,14 @@ fn old_board_to_new_board(pos: &board::Position) -> bb::Board {
     board
 }
 
+fn old_game_to_new_game(old_game: &Game) -> bb::Game {
+    let mut game = bb::Game::new(old_board_to_new_board(&old_game.0[0]));
+    for pos in &old_game.0[1..] {
+        game.add_board(old_board_to_new_board(pos));
+    }
+    game
+}
+
 fn new_move_to_old_move(m: bb::Move) -> board::Move {
     let sr = 7 - (m.s.trailing_zeros() / 16) as usize;
     let sc = 9 - (m.s.trailing_zeros() % 16) as usize;
@@ -523,18 +547,17 @@ impl NewMctsPlayer {
 }
 
 impl GamePlayer for NewMctsPlayer {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let turn_duration = suggested_turn_duration(clock);
         let budget = mcts::Resources::new()
             .limit_time(turn_duration)
-            .limit_bytes(2_000_000_000)
-            .limit_top_confidence(0.8);
+            .limit_bytes(2_000_000_000);
 
         let (m, m_stats) = mcts::search(
-            &old_board_to_new_board(pos),
+            &&old_game_to_new_game(game),
             &budget,
             self.explore,
-            &mcts::smart_rollout,
+            &mcts::traditional_rollout,
             NewMctsPlayerReporter::new(clock),
         );
         (new_move_to_old_move(m), Some(m_stats.top_move_value))
@@ -543,7 +566,7 @@ impl GamePlayer for NewMctsPlayer {
 
 impl Display for NewMctsPlayer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bb-mcts({:.1})", self.explore)
+        write!(f, "bb-mcts({})", self.explore)
     }
 }
 
@@ -558,14 +581,13 @@ impl TimeLimitedNewMctsPlayer {
 }
 
 impl GamePlayer for TimeLimitedNewMctsPlayer {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let budget = mcts::Resources::new()
             .limit_time(self.turn_duration)
-            .limit_bytes(2_000_000_000)
-            .limit_top_confidence(0.9);
+            .limit_bytes(2_000_000_000);
 
         let (m, m_stats) = mcts::search(
-            &old_board_to_new_board(pos),
+            &old_game_to_new_game(game),
             &budget,
             1.0,
             &mcts::traditional_rollout,
@@ -587,6 +609,7 @@ struct LinearAgentPlayer {
 }
 
 impl LinearAgentPlayer {
+    #[allow(unused)]
     fn new(name: &'static str, weights: &[f64]) -> LinearAgentPlayer {
         LinearAgentPlayer {
             name,
@@ -596,7 +619,7 @@ impl LinearAgentPlayer {
 }
 
 impl GamePlayer for LinearAgentPlayer {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         let turn_duration = suggested_turn_duration(clock);
         let budget = mcts::Resources::new()
             .limit_time(turn_duration)
@@ -604,7 +627,7 @@ impl GamePlayer for LinearAgentPlayer {
             .limit_top_confidence(0.8);
 
         let (m, m_stats) = mcts::search(
-            &old_board_to_new_board(pos),
+            &old_game_to_new_game(game),
             &budget,
             1.0,
             &learn::LinearModelAgent::new(&self.weights),
@@ -654,12 +677,13 @@ impl<'a> mcts::StatsSink for NewMctsPlayerReporter<'a> {
     fn report(&mut self, stats: &mcts::Stats) -> () {
         if self.last_print.elapsed().as_millis() > 100 {
             print!(
-                "\x1b[G\x1b[K{} value={:+.3}{:+.3} d={} tc={:.3} {:8.1}/s sz={}",
+                "\x1b[G\x1b[K{} {:+.3}({:+.3}),{:.3} d={} {:.1e},{:.1e}/s {}",
                 self.clock,
-                stats.root_value,
+                stats.top_move_value,
                 stats.top_move_value - stats.root_value,
-                stats.tree_max_depth,
                 stats.top_confidence,
+                stats.tree_max_depth,
+                stats.tree_size as f64,
                 stats.root_visits as f64 / stats.time.as_secs_f64(),
                 Bytes(stats.bytes)
             );
@@ -761,7 +785,7 @@ impl StdinPlayer {
 }
 
 impl GamePlayer for StdinPlayer {
-    fn pick_move(&mut self, pos: &board::Position, clock: &FischerClock) -> PickedMove {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
         println!("{} move like 'a6 nw' or 'j1 ccw' (no quotes)", clock);
         loop {
             print!("move> ");
@@ -778,7 +802,7 @@ impl GamePlayer for StdinPlayer {
                 }
             };
 
-            if !pos.moves().iter().any(|x| m == *x) {
+            if !game.pos().moves().iter().any(|x| m == *x) {
                 println!("{} invalid move", clock);
             } else {
                 return (m, None);
@@ -790,6 +814,33 @@ impl GamePlayer for StdinPlayer {
 impl Display for StdinPlayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "stdin()")
+    }
+}
+
+struct RandomOpening<G> {
+    num_moves: usize,
+    inner: G,
+}
+
+impl<G> RandomOpening<G> {
+    fn new(num_moves: usize, inner: G) -> RandomOpening<G> {
+        RandomOpening { num_moves, inner }
+    }
+}
+
+impl<G: GamePlayer> GamePlayer for RandomOpening<G> {
+    fn pick_move(&mut self, game: &Game, clock: &FischerClock) -> PickedMove {
+        if game.0.len() <= self.num_moves * 2 {
+            RandomPlayer.pick_move(game, clock)
+        } else {
+            self.inner.pick_move(game, clock)
+        }
+    }
+}
+
+impl<G: GamePlayer> Display for RandomOpening<G> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "rand({}, {})", self.num_moves, self.inner)
     }
 }
 
@@ -810,14 +861,16 @@ impl GameResult {
 
 fn run_game(
     heading: &str,
-    mut pos: board::Position,
+    initial_pos: board::Position,
     white: &mut dyn GamePlayer,
     red: &mut dyn GamePlayer,
     clock_main: Duration,
     clock_incr: Duration,
     clock_limit: Duration,
+    draw_threshold: usize,
 ) -> GameResult {
     let mut log = Transcript::new();
+    let mut game = Game(vec![initial_pos]);
     let mut clock = FischerClock::new(clock_main, clock_incr, clock_limit);
 
     loop {
@@ -826,7 +879,7 @@ fn run_game(
         println!();
         println!("  (W) {} vs {} (R)", white, red);
         println!();
-        pos.dump();
+        game.pos().dump();
         println!();
         log.dump();
         println!();
@@ -834,19 +887,19 @@ fn run_game(
         let winner = clock
             .over_time()
             .map(board::Color::opp)
-            .or_else(|| pos.winner());
+            .or_else(|| game.pos().winner());
 
         if let Some(winner) = winner {
             return GameResult::winner(winner);
         }
 
-        if log.items.len() >= 100 {
+        if log.items.len() >= draw_threshold {
             return GameResult::Draw;
         }
 
-        let (m, m_value) = match pos.to_move() {
-            board::Color::White => white.pick_move(&pos, &clock),
-            board::Color::Red => red.pick_move(&pos, &clock),
+        let (m, m_value) = match game.pos().to_move() {
+            board::Color::White => white.pick_move(&game, &clock),
+            board::Color::Red => red.pick_move(&game, &clock),
         };
 
         if let Some(loser) = clock.flip() {
@@ -854,11 +907,11 @@ fn run_game(
             return GameResult::winner(loser.opp());
         }
         log.items.push({
-            let mut item = TranscriptItem::new(&pos, m);
+            let mut item = TranscriptItem::new(game.pos(), m);
             item.value = m_value;
             item
         });
-        pos.apply_move(m);
+        game.apply_move(&m);
     }
 }
 
@@ -867,6 +920,7 @@ struct League {
     clock_main: Duration,
     clock_incr: Duration,
     clock_limit: Duration,
+    draw_threshold: usize,
 }
 
 struct LeaguePlayer {
@@ -876,12 +930,18 @@ struct LeaguePlayer {
 }
 
 impl League {
-    pub fn new(clock_main: Duration, clock_incr: Duration, clock_limit: Duration) -> League {
+    pub fn new(
+        clock_main: Duration,
+        clock_incr: Duration,
+        clock_limit: Duration,
+        draw_threshold: usize,
+    ) -> League {
         League {
             players: Vec::new(),
             clock_main,
             clock_incr,
             clock_limit,
+            draw_threshold,
         }
     }
 
@@ -913,6 +973,7 @@ impl League {
             self.clock_main,
             self.clock_incr,
             self.clock_limit,
+            self.draw_threshold,
         );
 
         let expected = {
@@ -970,6 +1031,7 @@ struct Comparator<P1, P2> {
     clock_main: Duration,
     clock_incr: Duration,
     clock_limit: Duration,
+    draw_threshold: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -986,6 +1048,7 @@ impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
         clock_main: Duration,
         clock_incr: Duration,
         clock_limit: Duration,
+        draw_threshold: usize,
     ) -> Comparator<P1, P2> {
         Comparator {
             p1: Box::new(p1),
@@ -995,6 +1058,7 @@ impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
             clock_main,
             clock_incr,
             clock_limit,
+            draw_threshold,
         }
     }
 
@@ -1012,6 +1076,7 @@ impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
                 self.clock_main,
                 self.clock_incr,
                 self.clock_limit,
+                self.draw_threshold,
             )
         });
 
@@ -1030,6 +1095,7 @@ impl<P1: GamePlayer, P2: GamePlayer> Comparator<P1, P2> {
                 self.clock_main,
                 self.clock_incr,
                 self.clock_limit,
+                self.draw_threshold,
             )
         });
 
@@ -1084,6 +1150,7 @@ struct PeriodicReporter {
 }
 
 impl PeriodicReporter {
+    #[allow(unused)]
     fn new(board: bb::Board) -> PeriodicReporter {
         PeriodicReporter {
             board,
@@ -1103,7 +1170,7 @@ impl mcts::StatsSink for PeriodicReporter {
                 stats.root_visits as f64 / stats.time.as_secs_f64()
             );
             let mut next = self.board;
-            next.apply_move(stats.top_move);
+            next.apply_move(&stats.top_move);
             let s = format!(
                 "\x1b[H\x1b[J{}\n\n{}\n\n{}\n\n{:#?}",
                 self.board, s, next, stats
@@ -1116,41 +1183,16 @@ impl mcts::StatsSink for PeriodicReporter {
 }
 
 #[allow(unused)]
-fn new_mcts_main() {
-    loop {
-        let mut board = bb::Board::new_classic();
-        while !board.is_terminal() {
-            let budget = mcts::Resources::new()
-                .limit_time(Duration::from_secs(20))
-                .limit_bytes(1_000_000_000);
-            let (m, _) = mcts::search(
-                &board,
-                &budget,
-                1.0,
-                &mcts::smart_rollout,
-                PeriodicReporter::new(board),
-            );
-            board.apply_move(m);
-            board.apply_laser_rule();
-            board.switch_turn();
-        }
-        println!();
-        println!();
-        println!("{}", board);
-        thread::sleep(Duration::from_secs(2));
-    }
-}
-
-#[allow(unused)]
 fn compare_main() {
     env_logger::init();
 
     let mut compare = Comparator::new(
-        || NewMctsPlayer::new(1.0),
-        || LinearAgentPlayer::new("v1", weights::WEIGHTS_V1),
-        Duration::from_secs(6),
-        Duration::from_secs(6),
-        Duration::from_secs(6),
+        || RandomOpening::new(3, NewMctsPlayer::new(0.999)),
+        || RandomOpening::new(3, NewMctsPlayer::new(0.998)),
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+        1000,
     );
 
     loop {
@@ -1170,6 +1212,7 @@ fn play_main() {
         Duration::from_secs(3600),
         Duration::from_secs(3600),
         Duration::from_secs(3600),
+        1000,
     );
 
     match res {
@@ -1187,6 +1230,7 @@ fn league_main() {
         Duration::from_secs(5),
         Duration::from_secs(5),
         Duration::from_secs(5),
+        1000,
     );
 
     //league.add_player(DepthLimitedAlphaBetaPlayerEvalMaterial(2));
@@ -1247,7 +1291,7 @@ fn clock_main() {
 }
 
 fn main() {
-    league_main();
+    compare_main();
 }
 
 /*

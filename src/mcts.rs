@@ -99,7 +99,7 @@ pub fn traditional_rollout(input_board: &bb::Board) -> f64 {
             return if board.white_wins() { 1.0 } else { -1.0 };
         }
 
-        board.apply_move(board.movegen().rand_move());
+        board.apply_move(&board.movegen().rand_move());
         board.apply_laser_rule();
         board.switch_turn();
     }
@@ -116,8 +116,7 @@ pub fn smart_rollout(input_board: &bb::Board) -> f64 {
         let moves = next.movegen();
         for _ in 0..50 {
             next = board;
-            let m = moves.rand_move();
-            next.apply_move(m);
+            next.apply_move(&moves.rand_move());
             let my_pharaoh = next.my_pharaoh();
             let kill = next.apply_laser_rule();
             if my_pharaoh != kill {
@@ -136,7 +135,7 @@ struct Node<'alo> {
 }
 
 pub fn search<R: Rollout, S: StatsSink>(
-    board: &bb::Board,
+    initial_game: &bb::Game,
     budget: &Resources,
     explore: f64,
     rollout: &R,
@@ -149,9 +148,10 @@ pub fn search<R: Rollout, S: StatsSink>(
         panic!("mcts::search needs a budget to know when to stop");
     }
 
-    let root_moves = board.movegen().to_vec();
+    let mut game = initial_game.clone();
     let mut top_move = 0;
     let mut top_confidence = 0.0;
+    let root_moves = game.latest().movegen().to_vec();
 
     let mut stats = Stats {
         root_visits: 0,
@@ -167,9 +167,9 @@ pub fn search<R: Rollout, S: StatsSink>(
     };
 
     let mut root = {
-        let children = gen_children_in(board, &root_moves[..], rollout, &bump);
+        let children = gen_children_in(&game, &root_moves[..], rollout, &bump);
         Node {
-            board: board.clone(),
+            board: game.latest().clone(),
             score: Score::aggregate(&children),
             children: Some(children),
         }
@@ -186,7 +186,8 @@ pub fn search<R: Rollout, S: StatsSink>(
             break;
         }
 
-        root.expand_in(explore, rollout, &bump);
+        root.expand_in(&mut game, explore, rollout, &bump);
+        game.truncate(initial_game.history().len());
 
         let root_children = root.children.as_ref().unwrap();
         top_move = pick_top(root_children);
@@ -221,8 +222,14 @@ impl<'alo> Node<'alo> {
         }
     }
 
-    fn expand_in<R: Rollout>(&mut self, explore: f64, rollout: &R, bump: &'alo Bump) {
-        if self.board.is_terminal() {
+    fn expand_in<R: Rollout>(
+        &mut self,
+        game: &mut bb::Game,
+        explore: f64,
+        rollout: &R,
+        bump: &'alo Bump,
+    ) {
+        if game.would_draw(&self.board) || self.board.is_terminal() {
             self.score.visits += 1;
             return;
         }
@@ -230,11 +237,12 @@ impl<'alo> Node<'alo> {
         let children = if let Some(mut children) = self.children.take() {
             let invert = !self.board.white_to_move();
             let top = pick_explore_uct(explore, invert, self.score.visits, &children);
-            children[top].expand_in(explore, rollout, bump);
+            game.add_board(children[top].board.clone());
+            children[top].expand_in(game, explore, rollout, bump);
             children
         } else {
             let moves = self.board.movegen().to_vec();
-            gen_children_in(&self.board, &moves[..], rollout, bump)
+            gen_children_in(game, &moves[..], rollout, bump)
         };
 
         self.score = Score::aggregate(&children);
@@ -242,17 +250,19 @@ impl<'alo> Node<'alo> {
     }
 }
 
-fn terminal_value(board: &bb::Board) -> Option<f64> {
-    if board.is_terminal() {
+fn terminal_value(game: &bb::Game, board: &bb::Board) -> Option<f64> {
+    if game.would_draw(board) {
+        Some(0.0)
+    } else if board.is_terminal() {
         Some(if board.white_wins() { 1.0 } else { -1.0 })
     } else {
         None
     }
 }
 
-fn calc_initial_score<R: Rollout>(board: &bb::Board, rollout: &R) -> Score {
+fn calc_initial_score<R: Rollout>(game: &bb::Game, board: &bb::Board, rollout: &R) -> Score {
     Score {
-        value: match terminal_value(board) {
+        value: match terminal_value(game, board) {
             Some(value) => value,
             None => rollout.rollout(board),
         },
@@ -262,7 +272,7 @@ fn calc_initial_score<R: Rollout>(board: &bb::Board, rollout: &R) -> Score {
 }
 
 fn gen_children_in<'alo, R: Rollout>(
-    board: &bb::Board,
+    game: &bb::Game,
     moves: &[bb::Move],
     rollout: &R,
     bump: &'alo Bump,
@@ -273,14 +283,8 @@ fn gen_children_in<'alo, R: Rollout>(
     moves
         .par_iter()
         .map(|m| {
-            let next = {
-                let mut next = board.clone();
-                next.apply_move(*m);
-                next.apply_laser_rule();
-                next.switch_turn();
-                next
-            };
-            let initial_score = calc_initial_score(&next, rollout);
+            let next = game.peek_move(m);
+            let initial_score = calc_initial_score(game, &next, rollout);
             (next, initial_score)
         })
         .collect_into_vec(&mut rollouts);
@@ -381,11 +385,11 @@ mod tests {
 
     #[bench]
     fn bench_mcts_1000(b: &mut Bencher) {
-        let board = bb::Board::new_classic();
+        let game = bb::Game::new(bb::Board::new_classic());
         b.iter(|| {
             let budget = mcts::Resources::new().limit_tree_size(1000);
             let m = mcts::search(
-                &board,
+                &game,
                 &budget,
                 1.0,
                 &mcts::traditional_rollout,

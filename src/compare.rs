@@ -5,10 +5,14 @@ use std::{
 
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
-use crate::{bb, board::Color, mcts};
+use crate::{
+    bb::{self, GameOutcome},
+    board::Color,
+    mcts,
+};
 
 pub trait MoveSelector: Clone + Send + Sync {
-    fn pick_move(&self, board: &bb::Board, turn_duration: Duration) -> bb::Move;
+    fn pick_move(&self, game: &bb::Game, turn_duration: Duration) -> bb::Move;
 }
 
 #[derive(Clone)]
@@ -23,9 +27,9 @@ impl<R> MctsMoveSelector<R> {
 }
 
 impl<R: mcts::Rollout + Clone + Send + Sync> MoveSelector for MctsMoveSelector<R> {
-    fn pick_move(&self, board: &bb::Board, turn_duration: Duration) -> bb::Move {
+    fn pick_move(&self, game: &bb::Game, turn_duration: Duration) -> bb::Move {
         let budget = mcts::Resources::new().limit_time(turn_duration.mul_f64(0.9));
-        let (m, _) = mcts::search(board, &budget, 1.0, &self.rollout, &mcts::stats_ignore);
+        let (m, _) = mcts::search(game, &budget, 1.0, &self.rollout, &mcts::stats_ignore);
         m
     }
 }
@@ -61,12 +65,12 @@ fn compare_once<W, R>(
     red: R,
     turn_duration: Duration,
     draw_thresh: usize,
-) -> Option<Color>
+) -> bb::GameOutcome
 where
     W: MoveSelector,
     R: MoveSelector,
 {
-    let mut board = bb::Board::new_classic();
+    let mut game = bb::Game::new(bb::Board::new_classic());
 
     for ply in 0..draw_thresh {
         let turn_start = Instant::now();
@@ -77,28 +81,25 @@ where
         };
 
         let m = match to_move {
-            Color::White => white.pick_move(&board, turn_duration),
-            Color::Red => red.pick_move(&board, turn_duration),
+            Color::White => white.pick_move(&game, turn_duration),
+            Color::Red => red.pick_move(&game, turn_duration),
         };
 
         if turn_duration < turn_start.elapsed() {
-            return Some(to_move.opp());
+            return match to_move.opp() {
+                Color::White => GameOutcome::WhiteWins,
+                Color::Red => GameOutcome::RedWins,
+            };
         }
 
-        board.apply_move(m);
-        board.apply_laser_rule();
-        board.switch_turn();
+        game.add_move(&m);
 
-        if board.is_terminal() {
-            let winner = match board.white_wins() {
-                true => Color::White,
-                false => Color::Red,
-            };
-            return Some(winner);
+        if let Some(outcome) = game.outcome() {
+            return outcome;
         }
     }
 
-    None
+    bb::GameOutcome::Draw
 }
 
 pub fn compare<P1, P2, S>(
@@ -140,19 +141,17 @@ where
     };
 
     (0..(num_games / 2)).into_par_iter().for_each(|_| {
-        let winner = compare_once(p1.clone(), p2.clone(), turn_duration, draw_thresh);
-        match winner {
-            Some(Color::White) => p1_win.fetch_add(1, Ordering::Relaxed),
-            Some(Color::Red) => p1_lose.fetch_add(1, Ordering::Relaxed),
-            None => p1_draw.fetch_add(1, Ordering::Relaxed),
+        match compare_once(p1.clone(), p2.clone(), turn_duration, draw_thresh) {
+            GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
+            GameOutcome::WhiteWins => p1_win.fetch_add(1, Ordering::Relaxed),
+            GameOutcome::RedWins => p1_lose.fetch_add(1, Ordering::Relaxed),
         };
         stats_sink.report(capture_stats());
 
-        let winner = compare_once(p2.clone(), p1.clone(), turn_duration, draw_thresh);
-        match winner {
-            Some(Color::White) => p1_lose.fetch_add(1, Ordering::Relaxed),
-            Some(Color::Red) => p1_win.fetch_add(1, Ordering::Relaxed),
-            None => p1_draw.fetch_add(1, Ordering::Relaxed),
+        match compare_once(p2.clone(), p1.clone(), turn_duration, draw_thresh) {
+            GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
+            GameOutcome::WhiteWins => p1_lose.fetch_add(1, Ordering::Relaxed),
+            GameOutcome::RedWins => p1_win.fetch_add(1, Ordering::Relaxed),
         };
         stats_sink.report(capture_stats());
     });

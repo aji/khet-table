@@ -29,56 +29,44 @@ impl LinearModelAgent {
     }
 
     pub fn run_self_play(&self) -> (f64, f64, Vec<f64>) {
-        let (game_history, outcome) = {
-            let mut history: Vec<bb::Board> = Vec::new();
-            let mut board = bb::Board::new_classic();
+        let (game, outcome) = {
+            let mut game = bb::Game::new(bb::Board::new_classic());
             let budget = mcts::Resources::new().limit_tree_size(TREE_LIMIT);
 
-            history.push(board);
-            while history.len() < 200 && !board.is_terminal() {
+            while game.outcome().is_none() {
                 let m = if rand::random::<f64>() < 0.1 {
-                    board.movegen().rand_move()
+                    game.latest().movegen().rand_move()
                 } else {
-                    mcts::search(&board, &budget, 1.0, self, &mcts::stats_ignore).0
+                    mcts::search(&game, &budget, 1.0, self, &mcts::stats_ignore).0
                 };
-                board.apply_move(m);
-                board.apply_laser_rule();
-                board.switch_turn();
-                history.push(board);
+                game.add_move(&m);
             }
 
-            let outcome = if !board.is_terminal() {
-                0.0
-            } else if board.white_wins() {
-                1.0
-            } else {
-                -1.0
-            };
-
-            (history, outcome)
+            let outcome = game.outcome().unwrap();
+            (game, outcome)
         };
 
         let mut grads: Vec<Vec<f64>> = Vec::new();
         let mut total_loss: f64 = 0.0;
 
-        for board in game_history.iter() {
+        for board in game.history().iter() {
             let features = self.extract_features(board);
             let (loss, grad) = self.model.backward(
                 &features[..],
                 if board.white_to_move() {
-                    outcome
+                    outcome.value()
                 } else {
-                    -outcome
+                    -outcome.value()
                 },
             );
             grads.push(grad);
             total_loss += loss;
         }
 
-        let avg_loss = total_loss / game_history.len() as f64;
+        let avg_loss = total_loss / game.history().len() as f64;
         let avg_grad = Grad::combine(1.0 / grads.len() as f64, &grads[..]);
 
-        (outcome, avg_loss, avg_grad)
+        (outcome.value(), avg_loss, avg_grad)
     }
 
     pub fn learn(&mut self, lr: f64, grads: &[Vec<f64>]) {
