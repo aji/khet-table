@@ -554,6 +554,7 @@ struct NewMctsPlayer {
 }
 
 impl NewMctsPlayer {
+    #[allow(unused)]
     fn new(explore: f64) -> NewMctsPlayer {
         NewMctsPlayer { explore }
     }
@@ -1305,7 +1306,7 @@ fn clock_main() {
 }
 
 fn main() {
-    compare_main();
+    compare::compare_main();
 }
 
 /*

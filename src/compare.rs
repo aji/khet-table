@@ -3,8 +3,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rayon::prelude::{IntoParallelIterator, ParallelIterator};
-
 use crate::{
     bb::{self, GameOutcome},
     board::Color,
@@ -17,19 +15,29 @@ pub trait MoveSelector: Clone + Send + Sync {
 
 #[derive(Clone)]
 pub struct MctsMoveSelector<R> {
+    explore: f64,
     rollout: R,
 }
 
 impl<R> MctsMoveSelector<R> {
-    pub fn new(rollout: R) -> MctsMoveSelector<R> {
-        MctsMoveSelector { rollout }
+    pub fn new(explore: f64, rollout: R) -> MctsMoveSelector<R> {
+        MctsMoveSelector { explore, rollout }
     }
 }
 
 impl<R: mcts::Rollout + Clone + Send + Sync> MoveSelector for MctsMoveSelector<R> {
     fn pick_move(&self, game: &bb::Game, turn_duration: Duration) -> bb::Move {
-        let budget = mcts::Resources::new().limit_time(turn_duration.mul_f64(0.9));
-        let (m, _) = mcts::search(game, &budget, 1.0, &self.rollout, &mcts::stats_ignore);
+        //let budget = mcts::Resources::new().limit_time(turn_duration.mul_f64(0.9));
+        let budget = mcts::Resources::new()
+            .limit_time(turn_duration.mul_f64(0.9))
+            .limit_tree_size(100000);
+        let (m, _) = mcts::search(
+            game,
+            &budget,
+            self.explore,
+            &self.rollout,
+            &mcts::stats_ignore,
+        );
         m
     }
 }
@@ -140,7 +148,7 @@ where
         }
     };
 
-    (0..(num_games / 2)).into_par_iter().for_each(|_| {
+    (0..(num_games / 2)).for_each(|_| {
         match compare_once(p1.clone(), p2.clone(), turn_duration, draw_thresh) {
             GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
             GameOutcome::WhiteWins => p1_win.fetch_add(1, Ordering::Relaxed),
@@ -160,14 +168,40 @@ where
 }
 
 pub fn compare_main() {
-    let results = compare(
-        MctsMoveSelector::new(&mcts::smart_rollout),
-        MctsMoveSelector::new(&mcts::traditional_rollout),
-        100,
-        Duration::from_secs(1),
-        100,
-        |stats| println!("{:#?}", stats),
-    );
+    let mut iter = 0;
+    let mut current = 1.0;
 
-    println!("RESULTS\n{:#?}", results)
+    loop {
+        let f = 1.1;
+        let (a, b) = (current / f, current * f);
+        let results = compare(
+            MctsMoveSelector::new(a, &mcts::smart_rollout),
+            MctsMoveSelector::new(b, &mcts::traditional_rollout),
+            50,
+            Duration::from_secs(10),
+            1000,
+            |stats: Stats| {
+                let total_played = stats.p1_win + stats.p1_draw + stats.p1_lose;
+                println!(
+                    "iter={} current={:.2} ({:3}/{:3}) {:.2}({:2}/{:2}/{:2}){:.2} rel. elo {:+6.0}",
+                    iter,
+                    current,
+                    total_played,
+                    stats.num_games,
+                    a,
+                    stats.p1_win,
+                    stats.p1_draw,
+                    stats.p1_lose,
+                    b,
+                    stats.p1_rel_elo
+                );
+            },
+        );
+
+        let f = 1.0 / (1.0 + 10.0f64.powf(-results.p1_rel_elo / 400.0));
+        current = f * a + (1.0 - f) * b;
+
+        println!("iter={} current={}", iter, current);
+        iter += 1;
+    }
 }
