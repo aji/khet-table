@@ -181,6 +181,19 @@ impl Game {
         next.apply_move(*m);
         self.0.push(next);
     }
+
+    fn outcome(&self) -> Option<GameResult> {
+        let repeats = self.0.iter().filter(|p| *p == self.pos()).count();
+        if repeats >= 3 {
+            Some(GameResult::Draw)
+        } else {
+            match self.pos().winner() {
+                Some(board::Color::White) => Some(GameResult::WhiteWins),
+                Some(board::Color::Red) => Some(GameResult::RedWins),
+                None => None,
+            }
+        }
+    }
 }
 
 struct TranscriptEval(Option<f64>);
@@ -884,15 +897,16 @@ fn run_game(
         log.dump();
         println!();
 
-        let winner = clock
-            .over_time()
-            .map(board::Color::opp)
-            .or_else(|| game.pos().winner());
+        if let Some(loser) = clock.over_time() {
+            return match loser.opp() {
+                board::Color::White => GameResult::WhiteWins,
+                board::Color::Red => GameResult::RedWins,
+            };
+        };
 
-        if let Some(winner) = winner {
-            return GameResult::winner(winner);
+        if let Some(outcome) = game.outcome() {
+            return outcome;
         }
-
         if log.items.len() >= draw_threshold {
             return GameResult::Draw;
         }
@@ -1187,11 +1201,11 @@ fn compare_main() {
     env_logger::init();
 
     let mut compare = Comparator::new(
-        || RandomOpening::new(3, NewMctsPlayer::new(0.999)),
-        || RandomOpening::new(3, NewMctsPlayer::new(0.998)),
-        Duration::from_secs(10),
-        Duration::from_secs(10),
-        Duration::from_secs(10),
+        || RandomOpening::new(3, LinearAgentPlayer::new("v1", weights::WEIGHTS_V1)),
+        || RandomOpening::new(3, LinearAgentPlayer::new("v2", weights::WEIGHTS_V2)),
+        Duration::from_secs_f32(1.2),
+        Duration::from_secs_f32(1.2),
+        Duration::from_secs_f32(1.2),
         1000,
     );
 
