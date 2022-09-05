@@ -19,10 +19,7 @@ extern crate typed_arena;
 use std::{
     fmt::{self, Debug, Display},
     io::{stdout, Write},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };

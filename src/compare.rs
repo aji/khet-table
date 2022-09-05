@@ -5,7 +5,7 @@ use std::{
 
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
-use crate::{bb, board::Color, learn, mcts, weights};
+use crate::{bb, board::Color, mcts};
 
 pub trait MoveSelector: Clone + Send + Sync {
     fn pick_move(&self, board: &bb::Board, turn_duration: Duration) -> bb::Move;
