@@ -30,7 +30,7 @@ impl<R: mcts::Rollout + Clone + Send + Sync> MoveSelector for MctsMoveSelector<R
         //let budget = mcts::Resources::new().limit_time(turn_duration.mul_f64(0.9));
         let budget = mcts::Resources::new()
             .limit_time(turn_duration.mul_f64(0.9))
-            .limit_tree_size(100000);
+            .limit_tree_size(2000);
         let (m, _) = mcts::search(
             game,
             &budget,
@@ -172,11 +172,10 @@ pub fn compare_main() {
     let mut current = 1.0;
 
     loop {
-        let f = 1.1;
-        let (a, b) = (current / f, current * f);
+        let (a, b) = (current / 1.1, current * 1.1);
         let results = compare(
             MctsMoveSelector::new(a, &mcts::smart_rollout),
-            MctsMoveSelector::new(b, &mcts::traditional_rollout),
+            MctsMoveSelector::new(b, &mcts::smart_rollout),
             50,
             Duration::from_secs(10),
             1000,
@@ -198,10 +197,10 @@ pub fn compare_main() {
             },
         );
 
-        let f = 1.0 / (1.0 + 10.0f64.powf(-results.p1_rel_elo / 400.0));
+        let f = 1.0 / (1.0 + 10.0f64.powf(-5.0 * results.p1_rel_elo / 400.0));
         current = f * a + (1.0 - f) * b;
+        iter += 1;
 
         println!("iter={} current={}", iter, current);
-        iter += 1;
     }
 }
