@@ -8,6 +8,7 @@ extern crate rayon;
 extern crate test;
 extern crate typed_arena;
 
+pub mod agent;
 pub mod bb;
 pub mod board;
 pub mod clock;

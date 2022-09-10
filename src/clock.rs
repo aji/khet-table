@@ -5,13 +5,41 @@ use std::{
 
 use crate::board::Color;
 
-pub struct FischerClock {
-    // config
+#[derive(Copy, Clone, Debug)]
+pub struct FischerClockConfig {
     pub main: Duration,
     pub incr: Duration,
     pub limit: Duration,
+}
 
-    // state
+impl FischerClockConfig {
+    pub fn new(main: Duration, incr: Duration, limit: Duration) -> FischerClockConfig {
+        FischerClockConfig { main, incr, limit }
+    }
+
+    pub fn fixed_turn_duration(dur: Duration) -> FischerClockConfig {
+        FischerClockConfig::new(dur, dur, dur)
+    }
+}
+
+impl fmt::Display for FischerClockConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.main == self.incr && self.incr == self.limit {
+            write!(f, "+{}", ApproxDur(self.incr))
+        } else {
+            write!(
+                f,
+                "{}+{}<{}",
+                ApproxDur(self.main),
+                ApproxDur(self.incr),
+                ApproxDur(self.limit)
+            )
+        }
+    }
+}
+
+pub struct FischerClock {
+    config: FischerClockConfig,
     white_main: Duration,
     red_main: Duration,
     turn: Color,
@@ -19,16 +47,21 @@ pub struct FischerClock {
 }
 
 impl FischerClock {
-    pub fn new(main: Duration, incr: Duration, limit: Duration) -> FischerClock {
+    pub fn start(config: FischerClockConfig) -> FischerClock {
         FischerClock {
-            main,
-            incr,
-            limit,
-            white_main: main,
-            red_main: main,
+            config,
+            white_main: config.main,
+            red_main: config.main,
             turn: Color::White,
             turn_start: Instant::now(),
         }
+    }
+
+    pub fn config(&self) -> &FischerClockConfig {
+        &self.config
+    }
+    pub fn incr(&self) -> Duration {
+        self.config.incr
     }
 
     pub fn over_time(&self) -> Option<Color> {
@@ -62,8 +95,8 @@ impl FischerClock {
             Color::Red => (Duration::ZERO, penalty),
         };
 
-        let white = (self.white_main.saturating_sub(white_penalty)).min(self.limit);
-        let red = (self.red_main.saturating_sub(red_penalty)).min(self.limit);
+        let white = (self.white_main.saturating_sub(white_penalty)).min(self.config.limit);
+        let red = (self.red_main.saturating_sub(red_penalty)).min(self.config.limit);
 
         (white, red)
     }
@@ -82,7 +115,7 @@ impl FischerClock {
             return Some(self.turn);
         }
 
-        *edit = (*edit + self.incr).min(self.limit);
+        *edit = (*edit + self.config.incr).min(self.config.limit);
         self.turn = self.turn.opp();
         self.turn_start = now;
         None
@@ -121,13 +154,7 @@ impl fmt::Display for FischerClock {
             }
         }
 
-        write!(
-            f,
-            " ({}+{}<{})",
-            ApproxDur(self.main),
-            ApproxDur(self.incr),
-            ApproxDur(self.limit)
-        )
+        write!(f, " ({})", self.config)
     }
 }
 

@@ -66,19 +66,24 @@ pub struct Stats {
     pub bytes: usize,
 }
 
-pub trait StatsSink {
-    fn report(&mut self, stats: &Stats) -> ();
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Signal {
+    Continue,
+    Abort,
 }
 
-impl<F: FnMut(&Stats) -> ()> StatsSink for F {
-    fn report(&mut self, stats: &Stats) -> () {
+pub trait Context {
+    fn defer(&mut self, stats: &Stats) -> Signal;
+}
+
+impl<F: FnMut(&Stats) -> Signal> Context for F {
+    fn defer(&mut self, stats: &Stats) -> Signal {
         (*self)(stats)
     }
 }
 
-pub fn stats_ignore(_: &Stats) {}
-pub fn stats_debug(s: &Stats) {
-    println!("{:#?}", s);
+pub fn ctx_noop(_: &Stats) -> Signal {
+    Signal::Continue
 }
 
 pub trait Rollout: Sync {
@@ -134,12 +139,12 @@ struct Node<'alo> {
     children: Option<Vec<'alo, Node<'alo>>>,
 }
 
-pub fn search<R: Rollout, S: StatsSink>(
+pub fn search<C: Context, R: Rollout>(
+    mut context: C,
     initial_game: &bb::Game,
     budget: &Resources,
     explore: f64,
     rollout: &R,
-    mut stats_sink: S,
 ) -> (bb::Move, Stats) {
     let start = Instant::now();
     let bump = Bump::new();
@@ -207,7 +212,9 @@ pub fn search<R: Rollout, S: StatsSink>(
             bytes: used.bytes,
         };
 
-        stats_sink.report(&stats);
+        if let Signal::Abort = context.defer(&stats) {
+            break;
+        }
     }
 
     (root_moves[top_move], stats)
@@ -389,11 +396,11 @@ mod tests {
         b.iter(|| {
             let budget = mcts::Resources::new().limit_tree_size(1000);
             let m = mcts::search(
+                &mcts::ctx_noop,
                 &game,
                 &budget,
                 1.0,
                 &mcts::traditional_rollout,
-                &mcts::stats_ignore,
             );
             black_box(m);
         });

@@ -1,48 +1,20 @@
 use std::{
+    io::Write,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
 use khet::{
+    agent::{self, Agent},
     bb::{self, GameOutcome},
     board::Color,
-    mcts,
+    clock::{FischerClock, FischerClockConfig},
 };
-
-pub trait MoveSelector: Clone + Send + Sync {
-    fn pick_move(&self, game: &bb::Game, turn_duration: Duration) -> bb::Move;
-}
-
-#[derive(Clone)]
-pub struct MctsMoveSelector<R> {
-    explore: f64,
-    rollout: R,
-}
-
-impl<R> MctsMoveSelector<R> {
-    pub fn new(explore: f64, rollout: R) -> MctsMoveSelector<R> {
-        MctsMoveSelector { explore, rollout }
-    }
-}
-
-impl<R: mcts::Rollout + Clone + Send + Sync> MoveSelector for MctsMoveSelector<R> {
-    fn pick_move(&self, game: &bb::Game, turn_duration: Duration) -> bb::Move {
-        let budget = mcts::Resources::new().limit_time(turn_duration.mul_f64(0.9));
-        let (m, _) = mcts::search(
-            game,
-            &budget,
-            self.explore,
-            &self.rollout,
-            &mcts::stats_ignore,
-        );
-        m
-    }
-}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Stats {
     pub num_games: usize,
-    pub turn_duration: Duration,
+    pub clock_config: FischerClockConfig,
 
     pub p1_win: usize,
     pub p1_draw: usize,
@@ -68,30 +40,99 @@ where
 fn compare_once<W, R>(
     white: W,
     red: R,
-    turn_duration: Duration,
+    clock_config: FischerClockConfig,
     draw_thresh: usize,
 ) -> bb::GameOutcome
 where
-    W: MoveSelector,
-    R: MoveSelector,
+    W: Agent,
+    R: Agent,
 {
     let mut game = bb::Game::new(bb::Board::new_classic());
+    let mut clock = FischerClock::start(clock_config);
+
+    let w_desc = format!("{}", white);
+    let r_desc = format!("{}", red);
 
     for ply in 0..draw_thresh {
-        let turn_start = Instant::now();
-
         let to_move = match ply % 2 {
             0 => Color::White,
             _ => Color::Red,
         };
 
-        let m = match to_move {
-            Color::White => white.pick_move(&game, turn_duration),
-            Color::Red => red.pick_move(&game, turn_duration),
+        let m = {
+            let mut last_report = Instant::now();
+            let turn_start = Instant::now();
+
+            let ctx = |stats: &agent::Report| {
+                if last_report.elapsed().as_millis() > 100 {
+                    let value: String = match stats.value {
+                        Some(v) => {
+                            let i = ((6. - v * 6.).round() as isize).clamp(0, 12);
+                            (0..=12)
+                                .map(|j| {
+                                    if j == i {
+                                        if j < 6 {
+                                            '<'
+                                        } else if 6 < j {
+                                            '>'
+                                        } else {
+                                            '='
+                                        }
+                                    } else if i < j && j <= 6 || 6 <= j && j < i {
+                                        '-'
+                                    } else {
+                                        ' '
+                                    }
+                                })
+                                .collect()
+                        }
+                        None => "      .      ".to_owned(),
+                    };
+
+                    let t = (turn_start.elapsed().as_millis() / 250) % 4;
+                    let progress: String = match stats.progress {
+                        Some(p) => (0..=10)
+                            .map(|i| if i as f64 / 10. < p { '|' } else { ' ' })
+                            .collect(),
+                        None => (0..=10)
+                            .map(|i| if i % 4 == t as usize { ' ' } else { '/' })
+                            .collect(),
+                    };
+
+                    print!(
+                        "\x1b[G\x1b[K{:3}. {}  {} {} [{}] {}",
+                        1 + (game.len_plys() / 2),
+                        clock,
+                        if to_move == Color::White {
+                            &w_desc
+                        } else {
+                            &r_desc
+                        },
+                        value,
+                        progress,
+                        stats.note.as_ref().map(|s| s.as_str()).unwrap_or("")
+                    );
+                    std::io::stdout().lock().flush().unwrap();
+                    last_report = Instant::now();
+                }
+
+                if clock.over_time().is_some() {
+                    agent::Signal::Abort
+                } else {
+                    agent::Signal::Continue
+                }
+            };
+
+            let picked = match to_move {
+                Color::White => white.pick_move(ctx, &game, &clock),
+                Color::Red => red.pick_move(ctx, &game, &clock),
+            };
+
+            picked.m
         };
 
-        if turn_duration < turn_start.elapsed() {
-            return match to_move.opp() {
+        if let Some(loser) = clock.flip() {
+            return match loser.opp() {
                 Color::White => GameOutcome::WhiteWins,
                 Color::Red => GameOutcome::RedWins,
             };
@@ -111,13 +152,13 @@ pub fn compare<P1, P2, S>(
     p1: P1,
     p2: P2,
     num_games: usize,
-    turn_duration: Duration,
+    clock_config: FischerClockConfig,
     draw_thresh: usize,
     stats_sink: S,
 ) -> Stats
 where
-    P1: MoveSelector,
-    P2: MoveSelector,
+    P1: Agent + Clone,
+    P2: Agent + Clone,
     S: StatsSink + Sync,
 {
     let start = Instant::now();
@@ -136,7 +177,7 @@ where
 
         Stats {
             num_games,
-            turn_duration,
+            clock_config,
             p1_win: w,
             p1_draw: d,
             p1_lose: l,
@@ -146,14 +187,14 @@ where
     };
 
     (0..(num_games / 2)).for_each(|_| {
-        match compare_once(p1.clone(), p2.clone(), turn_duration, draw_thresh) {
+        match compare_once(p1.clone(), p2.clone(), clock_config, draw_thresh) {
             GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
             GameOutcome::WhiteWins => p1_win.fetch_add(1, Ordering::Relaxed),
             GameOutcome::RedWins => p1_lose.fetch_add(1, Ordering::Relaxed),
         };
         stats_sink.report(capture_stats());
 
-        match compare_once(p2.clone(), p1.clone(), turn_duration, draw_thresh) {
+        match compare_once(p2.clone(), p1.clone(), clock_config, draw_thresh) {
             GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
             GameOutcome::WhiteWins => p1_lose.fetch_add(1, Ordering::Relaxed),
             GameOutcome::RedWins => p1_win.fetch_add(1, Ordering::Relaxed),
@@ -167,18 +208,30 @@ where
 pub fn main() {
     env_logger::init();
 
+    let p1 = agent::StandardMctsAgent::new(agent::StandardMctsTimeManagement::new(50));
+    let p2 = agent::StandardMctsAgent::new(agent::StandardMctsTimeManagement::new(25));
+
+    let p1_desc = format!("{}", p1);
+    let p2_desc = format!("{}", p2);
+
     compare(
-        MctsMoveSelector::new(1.0, &mcts::smart_rollout),
-        MctsMoveSelector::new(1.0, &mcts::smart_rollout),
+        p1,
+        p2,
         100,
-        Duration::from_secs(1),
+        FischerClockConfig::new(
+            Duration::from_secs_f64(120.0),
+            Duration::from_secs_f64(5.0),
+            Duration::from_secs_f64(120.0),
+        ),
         1000,
         |stats: Stats| {
             let total_played = stats.p1_win + stats.p1_draw + stats.p1_lose;
             println!(
-                "({:3}/{:3}) ({:3}/{:3}/{:3}) rel. elo {:+6.0}",
+                "\x1b[G\x1b[K({:3}/{:3}) P1={} P2={} ({:3}/{:3}/{:3}) P1 rel. elo {:+6.0}",
                 total_played,
                 stats.num_games,
+                p1_desc,
+                p2_desc,
                 stats.p1_win,
                 stats.p1_draw,
                 stats.p1_lose,

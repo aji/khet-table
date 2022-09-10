@@ -767,6 +767,10 @@ impl Game {
         &self.history[self.history.len() - 1]
     }
 
+    pub fn len_plys(&self) -> usize {
+        self.history.len() - 1
+    }
+
     pub fn history(&self) -> &[Board] {
         &self.history
     }
