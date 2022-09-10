@@ -36,6 +36,7 @@ pub mod compare;
 pub mod learn;
 pub mod mcts;
 pub mod model;
+pub mod nn;
 //pub mod render;
 pub mod weights;
 
@@ -1305,7 +1306,7 @@ fn clock_main() {
     }
 }
 
-fn main() {
+pub fn main() {
     compare::compare_main();
 }
 
