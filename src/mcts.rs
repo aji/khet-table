@@ -5,7 +5,7 @@ use rayon::prelude::*;
 
 use crate::bb;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Resources {
     time: Duration,
     tree_size: usize,

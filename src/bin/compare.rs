@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
+use khet::{
     bb::{self, GameOutcome},
     board::Color,
     mcts,
@@ -27,10 +27,7 @@ impl<R> MctsMoveSelector<R> {
 
 impl<R: mcts::Rollout + Clone + Send + Sync> MoveSelector for MctsMoveSelector<R> {
     fn pick_move(&self, game: &bb::Game, turn_duration: Duration) -> bb::Move {
-        //let budget = mcts::Resources::new().limit_time(turn_duration.mul_f64(0.9));
-        let budget = mcts::Resources::new()
-            .limit_time(turn_duration.mul_f64(0.9))
-            .limit_tree_size(2000);
+        let budget = mcts::Resources::new().limit_time(turn_duration.mul_f64(0.9));
         let (m, _) = mcts::search(
             game,
             &budget,
@@ -167,40 +164,26 @@ where
     capture_stats()
 }
 
-pub fn compare_main() {
-    let mut iter = 0;
-    let mut current = 1.0;
+pub fn main() {
+    env_logger::init();
 
-    loop {
-        let (a, b) = (current / 1.1, current * 1.1);
-        let results = compare(
-            MctsMoveSelector::new(a, &mcts::smart_rollout),
-            MctsMoveSelector::new(b, &mcts::smart_rollout),
-            50,
-            Duration::from_secs(10),
-            1000,
-            |stats: Stats| {
-                let total_played = stats.p1_win + stats.p1_draw + stats.p1_lose;
-                println!(
-                    "iter={} current={:.2} ({:3}/{:3}) {:.2}({:2}/{:2}/{:2}){:.2} rel. elo {:+6.0}",
-                    iter,
-                    current,
-                    total_played,
-                    stats.num_games,
-                    a,
-                    stats.p1_win,
-                    stats.p1_draw,
-                    stats.p1_lose,
-                    b,
-                    stats.p1_rel_elo
-                );
-            },
-        );
-
-        let f = 1.0 / (1.0 + 10.0f64.powf(-5.0 * results.p1_rel_elo / 400.0));
-        current = f * a + (1.0 - f) * b;
-        iter += 1;
-
-        println!("iter={} current={}", iter, current);
-    }
+    compare(
+        MctsMoveSelector::new(1.0, &mcts::smart_rollout),
+        MctsMoveSelector::new(1.0, &mcts::smart_rollout),
+        100,
+        Duration::from_secs(1),
+        1000,
+        |stats: Stats| {
+            let total_played = stats.p1_win + stats.p1_draw + stats.p1_lose;
+            println!(
+                "({:3}/{:3}) ({:3}/{:3}/{:3}) rel. elo {:+6.0}",
+                total_played,
+                stats.num_games,
+                stats.p1_win,
+                stats.p1_draw,
+                stats.p1_lose,
+                stats.p1_rel_elo
+            );
+        },
+    );
 }
