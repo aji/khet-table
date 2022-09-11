@@ -12,5 +12,6 @@ pub mod agent;
 pub mod bb;
 pub mod board;
 pub mod clock;
+pub mod compare;
 pub mod mcts;
 pub mod nn;

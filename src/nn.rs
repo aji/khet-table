@@ -4,7 +4,7 @@ pub use constants::*;
 pub use model::KhetModel;
 
 pub mod constants {
-    pub const N_FILTERS: usize = 32;
+    pub const N_FILTERS: usize = 16;
     pub const N_BLOCKS: usize = 8;
     pub const N_VALUE_HIDDEN: usize = 256;
 
@@ -297,6 +297,20 @@ pub mod model {
 
             (policy, value)
         }
+
+        pub fn namespaces<'g, 'name>(
+            &self,
+            env: &'g ag::VariableEnvironment<'name, Float>,
+        ) -> impl Iterator<Item = ag::variable::VariableNamespace<'g, 'name, Float>> {
+            let mut ns = Vec::new();
+            ns.push(env.namespace("input"));
+            for i in 0..self.res_blocks.len() {
+                ns.push(env.namespace(RES_NAMES[i]));
+            }
+            ns.push(env.namespace("policy"));
+            ns.push(env.namespace("value"));
+            ns.into_iter()
+        }
     }
 }
 
@@ -307,15 +321,25 @@ pub mod search {
 
     #[derive(Copy, Clone, Debug)]
     pub struct Params {
-        pub c_grow: f32,
+        pub training: bool,
+        pub c_base: f32,
         pub c_init: f32,
     }
 
-    impl Default for Params {
-        fn default() -> Params {
+    impl Params {
+        pub fn default_train() -> Params {
             Params {
-                c_grow: 1.0,
-                c_init: 1.0,
+                training: true,
+                c_base: 100.0,
+                c_init: 1.4,
+            }
+        }
+
+        pub fn default_eval() -> Params {
+            Params {
+                training: false,
+                c_base: 100.0,
+                c_init: 1.4,
             }
         }
     }
@@ -337,14 +361,14 @@ pub mod search {
     }
 
     pub trait Context {
-        fn defer(&self, stats: Stats) -> Signal;
+        fn defer(&mut self, stats: Stats) -> Signal;
     }
 
     impl<F> Context for F
     where
-        F: Fn(Stats) -> Signal,
+        F: FnMut(Stats) -> Signal,
     {
-        fn defer(&self, stats: Stats) -> Signal {
+        fn defer(&mut self, stats: Stats) -> Signal {
             (*self)(stats)
         }
     }
@@ -356,7 +380,7 @@ pub mod search {
     }
 
     pub fn run<C: Context>(
-        ctx: C,
+        mut ctx: C,
         env: &ag::VariableEnvironment<nn::Float>,
         model: &nn::KhetModel,
         game: &bb::Game,
@@ -367,7 +391,7 @@ pub mod search {
 
         loop {
             iters += 1;
-            root.expand(env, model, params, game.clone());
+            root.expand(env, model, params, game.clone(), true);
 
             let signal = ctx.defer(Stats {
                 iterations: iters,
@@ -442,12 +466,17 @@ pub mod search {
             self.children.iter().max_by_key(|e| e.node.visits)
         }
 
-        fn max_child_by_puct_mut(&mut self, params: &Params, invert: bool) -> Option<&mut Edge> {
+        fn max_child_by_puct_mut(
+            &mut self,
+            params: &Params,
+            invert: bool,
+            is_root: bool,
+        ) -> Option<&mut Edge> {
             let visit_count = self.visits;
             self.children
                 .iter_mut()
                 .map(|e| {
-                    let puct = e.puct(params, visit_count, invert);
+                    let puct = e.puct(params, visit_count, invert, is_root);
                     (e, puct)
                 })
                 .max_by(|a, b| a.1.total_cmp(&b.1))
@@ -500,6 +529,7 @@ pub mod search {
             model: &nn::KhetModel,
             params: &Params,
             mut game: bb::Game,
+            is_root: bool,
         ) -> f32 {
             let value = if let Some(outcome) = game.outcome() {
                 outcome.value() as f32
@@ -507,10 +537,10 @@ pub mod search {
                 self.initialize_children(env, model)
             } else {
                 let e = self
-                    .max_child_by_puct_mut(params, game.len_plys() % 2 == 1)
+                    .max_child_by_puct_mut(params, game.len_plys() % 2 == 1, is_root)
                     .unwrap();
                 game.add_board(e.node.board);
-                e.node.expand(env, model, params, game)
+                e.node.expand(env, model, params, game, false)
             };
 
             self.visits += 1;
@@ -537,12 +567,18 @@ pub mod search {
     }
 
     impl Edge {
-        fn puct(&self, params: &Params, parent_visits: usize, invert: bool) -> f32 {
+        fn puct(&self, params: &Params, parent_visits: usize, invert: bool, is_root: bool) -> f32 {
+            let prior = if params.training && is_root {
+                rand::random::<f32>() * 0.05
+            } else {
+                self.prior
+            };
+
             let n_tot = parent_visits as f32;
             let n = self.node.visits as f32;
             let q = if invert { -1.0 } else { 1.0 } * self.node.total_value / n;
-            let c = params.c_grow * (1.0 + n_tot).ln() + params.c_init;
-            let u = c * self.prior * n_tot.sqrt() / (1.0 + n);
+            let c = ((1.0 + n_tot + params.c_base) / params.c_base).ln() + params.c_init;
+            let u = c * prior * n_tot.sqrt() / (1.0 + n);
             q + u
         }
     }
@@ -558,8 +594,11 @@ pub mod train {
     };
 
     use crate::{bb, nn};
+    use ag::{prelude::Optimizer, tensor_ops as T, variable::NamespaceTrait};
     use autograd as ag;
     use rayon::prelude::*;
+
+    use nn::Float;
 
     #[derive(Clone, Debug)]
     #[allow(unused)]
@@ -575,14 +614,18 @@ pub mod train {
         implied_policy: Vec<f32>,
     }
 
-    fn run_self_play(env: &ag::VariableEnvironment<nn::Float>, model: &nn::KhetModel) -> SelfPlay {
+    fn run_self_play(
+        env: &ag::VariableEnvironment<nn::Float>,
+        model: &nn::KhetModel,
+        draw_threshold: usize,
+    ) -> SelfPlay {
         let mut game = bb::Game::new(bb::Board::new_classic());
         let mut positions: Vec<SelfPlayPosition> = Vec::new();
 
-        while game.outcome().is_none() {
+        while game.outcome().is_none() && game.len_plys() < draw_threshold {
             let res = nn::search::run(
                 |stats: nn::search::Stats| {
-                    if stats.iterations >= 800 {
+                    if stats.iterations >= 400 {
                         nn::search::Signal::Abort
                     } else {
                         nn::search::Signal::Continue
@@ -591,7 +634,7 @@ pub mod train {
                 &env,
                 &model,
                 &game,
-                &nn::search::Params::default(),
+                &nn::search::Params::default_train(),
             );
             positions.push(SelfPlayPosition {
                 board: game.latest().clone(),
@@ -606,17 +649,19 @@ pub mod train {
         SelfPlay { result, positions }
     }
 
-    pub fn do_game(
+    pub fn run_self_play_batch(
         env: &ag::VariableEnvironment<nn::Float>,
         model: &nn::KhetModel,
+        num_games: usize,
+        draw_threshold: usize,
     ) -> Vec<SelfPlay> {
         let res = Arc::new(Mutex::new(Vec::new()));
         let env = Arc::new(Mutex::new(env.clone()));
         let done: AtomicUsize = AtomicUsize::new(0);
 
-        (0..20).into_par_iter().for_each(|_| {
+        (0..num_games).into_par_iter().for_each(|_| {
             let my_env = env.lock().unwrap().clone();
-            let my_res = run_self_play(&my_env, model);
+            let my_res = run_self_play(&my_env, model, draw_threshold);
             print!("{}", done.fetch_add(1, Ordering::Relaxed) + 1);
             std::io::stdout().lock().flush().unwrap();
             res.lock().unwrap().push(my_res);
@@ -624,5 +669,80 @@ pub mod train {
         println!("\nall done");
 
         Arc::try_unwrap(res).unwrap().into_inner().unwrap()
+    }
+
+    pub fn update_weights(
+        env: &ag::VariableEnvironment<nn::Float>,
+        model: &nn::KhetModel,
+        games: &[SelfPlay],
+        lr: f32,
+    ) {
+        use ag::ndarray as nd;
+
+        let opt = ag::optimizers::SGD::new(lr);
+
+        let positions: Vec<(nd::Array3<Float>, nd::Array1<Float>, Float)> = games
+            .iter()
+            .map(|g| {
+                g.positions.iter().map(|p| {
+                    let image = p.board.nn_image();
+                    let policy: nd::Array1<Float> = nd::ArrayBase::from(p.implied_policy.clone());
+                    (image, policy, g.result)
+                })
+            })
+            .flatten()
+            .collect();
+
+        let ex_input = {
+            let image_views: Vec<_> = positions.iter().map(|a| a.0.view()).collect();
+            nd::stack(nd::Axis(0), &image_views[..]).unwrap()
+        };
+        let ex_policy = {
+            let policy_views: Vec<_> = positions.iter().map(|a| a.1.view()).collect();
+            nd::stack(nd::Axis(0), &policy_views[..]).unwrap()
+        };
+        let ex_value = {
+            let values: Vec<f32> = positions.iter().map(|a| a.2).collect();
+            nd::Array::from(values)
+        };
+
+        env.run(|g| {
+            let ex_input_t = g.placeholder("input", &[-1, 20, 8, 10]);
+            let ex_policy_t = g.placeholder("policy", &[-1, 800]);
+            let ex_value_t = g.placeholder("value", &[-1]);
+
+            let (policy, value) = model.eval(g, ex_input_t);
+            let log_policy = T::log_softmax(T::reshape(policy, &[-1, 800]), 1);
+            let value = T::reshape(value, &[-1]);
+
+            // ex_policy_t [N, 800], log_policy [N, 800], res -> [N, 1]
+            let neg_policy_loss_dots = T::batch_matmul(
+                T::reshape(ex_policy_t, &[-1, 1, 800]),
+                T::reshape(log_policy, &[-1, 800, 1]),
+            );
+            let neg_policy_loss = T::reshape(neg_policy_loss_dots, &[-1]);
+            let value_loss = T::pow(value - ex_value_t, 2.0);
+            let mean_loss = T::reduce_mean(value_loss - neg_policy_loss, &[0], false).show();
+
+            let vars: Vec<_> = model
+                .namespaces(&env)
+                .map(|ns| ns.current_var_ids().into_iter())
+                .flatten()
+                .map(|id| g.variable_by_id(id))
+                .collect();
+            let grads: Vec<_> = T::grad(&[mean_loss], &vars[..]);
+            let update = opt.get_update_op(&vars[..], &grads[..], g);
+
+            g.evaluator()
+                .push(update)
+                .feed("input", ex_input.view())
+                .feed("policy", ex_policy.view())
+                .feed("value", ex_value.view())
+                .run()
+                .into_iter()
+                .for_each(|r| {
+                    r.unwrap();
+                });
+        });
     }
 }
