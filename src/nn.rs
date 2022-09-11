@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use ag::ndarray_ext::ArrayRng;
 use autograd as ag;
 
@@ -16,76 +14,71 @@ const N_ROWS: usize = 8;
 const N_COLS: usize = 10;
 const N_INPUT_PLANES: usize = 20;
 
+pub type Float = f32;
+
 /*
 
 n = number of filters
 b = number of blocks
 v = value hidden layer size
 
-for 18 input planes and 800 moves:
+for 20 input planes and 800 moves:
 
-input = n * 18 * 3*3
+input = n * 20 * 3*3
 blocks = b * 2 * n*n * 3*3
 
-policy conv = 2 * n * 3*3
+policy conv = 2 * n * 1*1
 policy fc = 800 * 2*80
 
-value conv = n * 3*3
+value conv = n * 1*1
 value fc1 = v * 80
 value fc2 = 1 * v
 
-total = n*18*3*3 + b*2*n*n*3*3 + 2*n*3*3 + 800*2*80 + n*3*3 + v*80 + 1*v
-      = 162n + 18bnn + 18n + 128000 + 9n + 80v + v
-      = 18bnn + 189n + 81v + 128000
+total = n*20*3*3 + b*2*n*n*3*3 + 2*n*1*1 + 800*2*80 + n*1*1 + v*80 + 1*v
+      = 180n + 18bnn + 2n + 128000 + n + 80v + v
+      = 18bnn + 183n + 81v + 128000
 
 for various values of bxn,v:
 
                    total       in        tower    policy    value
-  2x 16, 16 =    141,536 =  2,592 +      9,216 + 128,288 +  1,440
-  8x 32,128 =    291,872 =  5,184 +    147,456 + 128,576 + 10,656
- 12x 64,128 =  1,035,200 = 10,368 +    884,736 + 129,152 + 10,944
- 16x128,256 =  4,891,520 = 20,736 +  4,718,592 + 130,304 + 21,888
- 19x256,256 = 22,610,432 = 41,472 + 22,413,312 + 132,608 + 23,040
+  2x 16, 16 =    141,440 =  2,880 +      9,216 + 128,032 +  1,312
+  8x 32,128 =    291,680 =  5,760 +    147,456 + 128,064 + 10,400
+ 12x 64,128 =  1,034,816 = 11,520 +    884,736 + 128,128 + 10,432
+ 16x128,256 =  4,890,752 = 23,040 +  4,718,592 + 128,256 + 20,864
+ 19x256,256 = 22,608,896 = 46,080 + 22,413,312 + 128,512 + 20,992
 
 */
 
-fn relu_norm_conv_2d<'g, X, W, F: ag::Float>(
-    x: X,
-    w: W,
-    pad: usize,
-    stride: usize,
-) -> ag::Tensor<'g, F>
+fn relu_norm_conv_2d<'g, X, W>(x: X, w: W, pad: usize, stride: usize) -> ag::Tensor<'g, Float>
 where
-    X: AsRef<ag::Tensor<'g, F>> + Copy,
-    W: AsRef<ag::Tensor<'g, F>> + Copy,
+    X: AsRef<ag::Tensor<'g, Float>> + Copy,
+    W: AsRef<ag::Tensor<'g, Float>> + Copy,
 {
     T::relu(T::normalize(T::conv2d(x, w, pad, stride), &[0, 2, 3]))
 }
 
 // w: [i, j], x: [batches, j], returns [batches, i]
-fn linear<'g, W, X, F: ag::Float>(w: W, x: X) -> ag::Tensor<'g, F>
+fn linear<'g, W, X>(w: W, x: X) -> ag::Tensor<'g, Float>
 where
-    W: AsRef<ag::Tensor<'g, F>> + Copy,
-    X: AsRef<ag::Tensor<'g, F>> + Copy,
+    W: AsRef<ag::Tensor<'g, Float>> + Copy,
+    X: AsRef<ag::Tensor<'g, Float>> + Copy,
 {
     T::matmul(x, T::transpose(w, &[1, 0]))
 }
 
-struct InputToRes<F> {
+struct InputToRes {
     conv: VariableID,
-    _phantom: PhantomData<F>,
 }
 
-impl<F: ag::Float> InputToRes<F> {
+impl InputToRes {
     fn new<'env, 'name, R: Rng>(
-        mut ns: VariableNamespaceMut<'env, 'name, F>,
-        rng: &ArrayRng<F, R>,
+        mut ns: VariableNamespaceMut<'env, 'name, Float>,
+        rng: &ArrayRng<Float, R>,
         n_filters: usize,
-    ) -> InputToRes<F> {
+    ) -> InputToRes {
         let shape = &[n_filters, N_INPUT_PLANES, 3, 3];
         InputToRes {
             conv: ns.slot().name("conv").set(rng.standard_normal(shape)),
-            _phantom: PhantomData,
         }
     }
 
@@ -93,30 +86,28 @@ impl<F: ag::Float> InputToRes<F> {
     // out [batch, n_filters, N_ROWS, N_COLS]
     fn eval<'env, 'name, 'g>(
         &self,
-        ctx: &'g ag::Context<'env, 'name, F>,
-        x: ag::Tensor<'g, F>,
-    ) -> ag::Tensor<'g, F> {
+        ctx: &'g ag::Context<'env, 'name, Float>,
+        x: ag::Tensor<'g, Float>,
+    ) -> ag::Tensor<'g, Float> {
         relu_norm_conv_2d(x, ctx.variable_by_id(self.conv), 1, 1)
     }
 }
 
-struct ResBlock<F> {
+struct ResBlock {
     conv1: VariableID,
     conv2: VariableID,
-    _phantom: PhantomData<F>,
 }
 
-impl<F: ag::Float> ResBlock<F> {
+impl ResBlock {
     fn new<'env, 'name, R: Rng>(
-        mut ns: VariableNamespaceMut<'env, 'name, F>,
-        rng: &ArrayRng<F, R>,
+        mut ns: VariableNamespaceMut<'env, 'name, Float>,
+        rng: &ArrayRng<Float, R>,
         n_filters: usize,
-    ) -> ResBlock<F> {
+    ) -> ResBlock {
         let shape = &[n_filters, n_filters, 3, 3];
         ResBlock {
             conv1: ns.slot().name("conv1").set(rng.standard_normal(shape)),
             conv2: ns.slot().name("conv2").set(rng.standard_normal(shape)),
-            _phantom: PhantomData,
         }
     }
 
@@ -124,9 +115,9 @@ impl<F: ag::Float> ResBlock<F> {
     // out [batch, n_filters, N_ROWS, N_COLS]
     fn eval<'env, 'name, 'g>(
         &self,
-        ctx: &'g ag::Context<'env, 'name, F>,
-        x0: ag::Tensor<'g, F>,
-    ) -> ag::Tensor<'g, F> {
+        ctx: &'g ag::Context<'env, 'name, Float>,
+        x0: ag::Tensor<'g, Float>,
+    ) -> ag::Tensor<'g, Float> {
         // This is a slight deviation from AlphaZero[1] and AlphaGo Zero[2]. In
         // AGZ they apply the skip connection before the ReLU. Here I'm doing
         // ReLU first before adding it back to the residual stream. In the
@@ -150,18 +141,17 @@ impl<F: ag::Float> ResBlock<F> {
     }
 }
 
-struct PolicyHead<F> {
+struct PolicyHead {
     conv: VariableID,
     fc: VariableID,
-    _phantom: PhantomData<F>,
 }
 
-impl<F: ag::Float> PolicyHead<F> {
+impl PolicyHead {
     fn new<'env, 'name, R: Rng>(
-        mut ns: VariableNamespaceMut<'env, 'name, F>,
-        rng: &ArrayRng<F, R>,
+        mut ns: VariableNamespaceMut<'env, 'name, Float>,
+        rng: &ArrayRng<Float, R>,
         n_filters: usize,
-    ) -> PolicyHead<F> {
+    ) -> PolicyHead {
         PolicyHead {
             conv: ns
                 .slot()
@@ -171,7 +161,6 @@ impl<F: ag::Float> PolicyHead<F> {
                 .slot()
                 .name("fc")
                 .set(rng.glorot_uniform(&[N_MOVES, 2 * N_ROWS * N_COLS])),
-            _phantom: PhantomData,
         }
     }
 
@@ -179,9 +168,9 @@ impl<F: ag::Float> PolicyHead<F> {
     // out [batch, N_MOVES]
     fn eval<'env, 'name, 'g>(
         &self,
-        ctx: &'g ag::Context<'env, 'name, F>,
-        x: &ag::Tensor<'g, F>,
-    ) -> ag::Tensor<'g, F> {
+        ctx: &'g ag::Context<'env, 'name, Float>,
+        x: &ag::Tensor<'g, Float>,
+    ) -> ag::Tensor<'g, Float> {
         let x = relu_norm_conv_2d(x, ctx.variable_by_id(self.conv), 0, 1);
         let x = T::reshape(x, &[-1, (2 * N_ROWS * N_COLS) as isize]);
         let x = linear(ctx.variable_by_id(self.fc), x);
@@ -189,20 +178,19 @@ impl<F: ag::Float> PolicyHead<F> {
     }
 }
 
-struct ValueHead<F> {
+struct ValueHead {
     conv: VariableID,
     fc1: VariableID,
     fc2: VariableID,
-    _phantom: PhantomData<F>,
 }
 
-impl<F: ag::Float> ValueHead<F> {
+impl ValueHead {
     fn new<'env, 'name, R: Rng>(
-        mut ns: VariableNamespaceMut<'env, 'name, F>,
-        rng: &ArrayRng<F, R>,
+        mut ns: VariableNamespaceMut<'env, 'name, Float>,
+        rng: &ArrayRng<Float, R>,
         n_filters: usize,
         n_hidden: usize,
-    ) -> ValueHead<F> {
+    ) -> ValueHead {
         ValueHead {
             conv: ns
                 .slot()
@@ -217,7 +205,6 @@ impl<F: ag::Float> ValueHead<F> {
                 -1.0 / n_hidden as f64,
                 1.0 / n_hidden as f64,
             )),
-            _phantom: PhantomData,
         }
     }
 
@@ -225,9 +212,9 @@ impl<F: ag::Float> ValueHead<F> {
     // out [batch]
     fn eval<'env, 'name, 'g>(
         &self,
-        ctx: &'g ag::Context<'env, 'name, F>,
-        x: &ag::Tensor<'g, F>,
-    ) -> ag::Tensor<'g, F> {
+        ctx: &'g ag::Context<'env, 'name, Float>,
+        x: &ag::Tensor<'g, Float>,
+    ) -> ag::Tensor<'g, Float> {
         let x = T::relu(T::conv2d(x, ctx.variable_by_id(self.conv), 0, 1));
         let x = T::reshape(x, &[-1, (N_ROWS * N_COLS) as isize]);
         let x = T::relu(linear(ctx.variable_by_id(self.fc1), x));
@@ -236,11 +223,11 @@ impl<F: ag::Float> ValueHead<F> {
     }
 }
 
-pub struct KhetModel<F> {
-    input_to_res: InputToRes<F>,
-    res_blocks: Vec<ResBlock<F>>,
-    policy_head: PolicyHead<F>,
-    value_head: ValueHead<F>,
+pub struct KhetModel {
+    input_to_res: InputToRes,
+    res_blocks: Vec<ResBlock>,
+    policy_head: PolicyHead,
+    value_head: ValueHead,
 }
 
 const RES_NAMES: [&'static str; 20] = [
@@ -248,14 +235,14 @@ const RES_NAMES: [&'static str; 20] = [
     "res11", "res12", "res13", "res14", "res15", "res16", "res17", "res18", "res19",
 ];
 
-impl<F: ag::Float> KhetModel<F> {
+impl KhetModel {
     pub fn new<R: Rng>(
-        env: &mut ag::VariableEnvironment<F>,
-        rng: &ArrayRng<F, R>,
+        env: &mut ag::VariableEnvironment<Float>,
+        rng: &ArrayRng<Float, R>,
         n_filters: usize,
         n_blocks: usize,
         n_value_hidden: usize,
-    ) -> KhetModel<F> {
+    ) -> KhetModel {
         KhetModel {
             input_to_res: InputToRes::new(env.namespace_mut("input"), rng, n_filters),
             res_blocks: (0..n_blocks)
@@ -270,9 +257,9 @@ impl<F: ag::Float> KhetModel<F> {
     // out ([batch, N_MOVES], [batch])
     pub fn eval<'env, 'name, 'g>(
         &self,
-        ctx: &'g ag::Context<'env, 'name, F>,
-        input: ag::Tensor<'g, F>,
-    ) -> (ag::Tensor<'g, F>, ag::Tensor<'g, F>) {
+        ctx: &'g ag::Context<'env, 'name, Float>,
+        input: ag::Tensor<'g, Float>,
+    ) -> (ag::Tensor<'g, Float>, ag::Tensor<'g, Float>) {
         let res = {
             let mut res = self.input_to_res.eval(ctx, input);
             for block in self.res_blocks.iter() {
@@ -288,7 +275,7 @@ impl<F: ag::Float> KhetModel<F> {
     }
 }
 
-pub fn default_model<F: ag::Float>(env: &mut ag::VariableEnvironment<F>) -> KhetModel<F> {
+pub fn default_model(env: &mut ag::VariableEnvironment<Float>) -> KhetModel {
     KhetModel::new(
         env,
         &ArrayRng::default(),
@@ -296,4 +283,38 @@ pub fn default_model<F: ag::Float>(env: &mut ag::VariableEnvironment<F>) -> Khet
         N_BLOCKS,
         N_VALUE_HIDDEN,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use test::{black_box, Bencher};
+
+    use super::*;
+    use crate::bb;
+
+    #[bench]
+    fn bench_nn_forward(b: &mut Bencher) {
+        let (env, model) = {
+            let mut env = ag::VariableEnvironment::<Float>::new();
+            let model = default_model(&mut env);
+            (env, model)
+        };
+
+        env.run(|g| {
+            let img = g.placeholder("img", &[20, 8, 10]);
+            let x = T::reshape(img, &[1, 20, 8, 10]);
+            let (policy, value) = model.eval(g, x);
+            let top = T::concat(&[policy, T::reshape(value, &[-1, 1])], 1);
+
+            b.iter(|| {
+                let board = bb::Board::new_classic();
+                black_box(
+                    g.evaluator()
+                        .push(top)
+                        .feed("img", board.nn_image().view())
+                        .run(),
+                );
+            });
+        });
+    }
 }

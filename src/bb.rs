@@ -1,6 +1,8 @@
 use autograd as ag;
 use std::fmt;
 
+use crate::nn;
+
 macro_rules! bb_dbg {
     () => {};
     ($($arg:tt)*) => {};
@@ -469,7 +471,7 @@ impl Board {
         self.e &= p | MASK_W_SPHINX | MASK_R_SPHINX;
     }
 
-    pub fn nn_image(&self) -> ag::ndarray::Array3<f64> {
+    pub fn nn_image(&self) -> ag::ndarray::Array3<nn::Float> {
         let mut img = ag::ndarray::Array3::zeros((20, 8, 10));
 
         let mut write_channel = |ch: usize, x: u128| {
@@ -644,6 +646,13 @@ impl Move {
         }
     }
 
+    pub fn nn_ith(&self, i: usize) -> Move {
+        let (j, x) = (i / 80, i % 80);
+        let (r, c) = (x / 10, x % 10);
+        let s = 1u128 << ((7 - r) * 16 + (9 - c));
+        Move::ith(s, j)
+    }
+
     fn shl(s: u128, shl: usize) -> Move {
         let d = s << shl;
         Move { s, d, dd: 0 }
@@ -771,6 +780,23 @@ impl MoveSet {
             }
         }
         res
+    }
+
+    pub fn nn_mask(&self) -> ag::ndarray::Array1<nn::Float> {
+        let mut mask = ag::ndarray::Array1::zeros(800);
+        for i in 0..=9 {
+            let mut m = 0x_0200_0000_0000_0000_0000_0000_0000_0000;
+            for r in 0..8 {
+                for c in 0..10 {
+                    let j = r * 10 + c;
+                    let x = self.0[j];
+                    mask[i * 80 + j] = if x & m != 0 { 1.0 } else { 0.0 };
+                    m >>= 1;
+                }
+                m >>= 6;
+            }
+        }
+        mask
     }
 }
 

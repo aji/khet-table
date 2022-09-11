@@ -5,7 +5,7 @@ use khet::bb;
 use khet::nn;
 
 fn main() {
-    let mut env = ag::VariableEnvironment::<f64>::new();
+    let mut env = ag::VariableEnvironment::<nn::Float>::new();
 
     let model = nn::default_model(&mut env);
     let board = bb::Board::new_classic();
@@ -21,4 +21,6 @@ fn main() {
 
         println!("{:#?}", top.eval(g));
     });
+
+    env.save("weights.json").unwrap();
 }
