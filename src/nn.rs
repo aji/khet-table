@@ -307,14 +307,14 @@ pub mod search {
 
     #[derive(Copy, Clone, Debug)]
     pub struct Params {
-        pub c_base: f32,
+        pub c_grow: f32,
         pub c_init: f32,
     }
 
     impl Default for Params {
         fn default() -> Params {
             Params {
-                c_base: 1.0,
+                c_grow: 1.0,
                 c_init: 1.0,
             }
         }
@@ -324,6 +324,10 @@ pub mod search {
     pub struct Stats {
         pub iterations: usize,
         pub policy: Vec<f32>,
+        pub root_value: f32,
+        pub tree_size: usize,
+        pub tree_max_height: usize,
+        pub tree_min_height: usize,
     }
 
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -368,6 +372,10 @@ pub mod search {
             let signal = ctx.defer(Stats {
                 iterations: iters,
                 policy: root.implied_policy(),
+                root_value: root.total_value / root.visits as f32,
+                tree_size: root.size,
+                tree_max_height: root.max_height,
+                tree_min_height: root.min_height,
             });
             if let Signal::Abort = signal {
                 break;
@@ -388,6 +396,9 @@ pub mod search {
         total_value: f32,
         visits: usize,
         children: Vec<Edge>,
+        size: usize,
+        max_height: usize,
+        min_height: usize,
     }
 
     struct Edge {
@@ -403,6 +414,9 @@ pub mod search {
                 total_value,
                 visits,
                 children: Vec::new(),
+                size: 1,
+                max_height: 1,
+                min_height: 1,
             }
         }
 
@@ -502,6 +516,22 @@ pub mod search {
             self.visits += 1;
             self.total_value += value;
 
+            self.size = self.children.iter().map(|e| e.node.size).sum::<usize>() + 1;
+            self.max_height = self
+                .children
+                .iter()
+                .map(|e| e.node.max_height)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            self.min_height = self
+                .children
+                .iter()
+                .map(|e| e.node.min_height)
+                .min()
+                .unwrap_or(0)
+                + 1;
+
             value
         }
     }
@@ -511,9 +541,88 @@ pub mod search {
             let n_tot = parent_visits as f32;
             let n = self.node.visits as f32;
             let q = if invert { -1.0 } else { 1.0 } * self.node.total_value / n;
-            let c = ((1.0 + n_tot + params.c_base) / params.c_base).ln() + params.c_init;
+            let c = params.c_grow * (1.0 + n_tot).ln() + params.c_init;
             let u = c * self.prior * n_tot.sqrt() / (1.0 + n);
             q + u
         }
+    }
+}
+
+pub mod train {
+    use std::{
+        io::Write,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
+    };
+
+    use crate::{bb, nn};
+    use autograd as ag;
+    use rayon::prelude::*;
+
+    #[derive(Clone, Debug)]
+    #[allow(unused)]
+    pub struct SelfPlay {
+        result: f32,
+        positions: Vec<SelfPlayPosition>,
+    }
+
+    #[derive(Clone, Debug)]
+    #[allow(unused)]
+    pub struct SelfPlayPosition {
+        board: bb::Board,
+        implied_policy: Vec<f32>,
+    }
+
+    fn run_self_play(env: &ag::VariableEnvironment<nn::Float>, model: &nn::KhetModel) -> SelfPlay {
+        let mut game = bb::Game::new(bb::Board::new_classic());
+        let mut positions: Vec<SelfPlayPosition> = Vec::new();
+
+        while game.outcome().is_none() {
+            let res = nn::search::run(
+                |stats: nn::search::Stats| {
+                    if stats.iterations >= 800 {
+                        nn::search::Signal::Abort
+                    } else {
+                        nn::search::Signal::Continue
+                    }
+                },
+                &env,
+                &model,
+                &game,
+                &nn::search::Params::default(),
+            );
+            positions.push(SelfPlayPosition {
+                board: game.latest().clone(),
+                implied_policy: res.policy,
+            });
+            print!(".");
+            std::io::stdout().lock().flush().unwrap();
+            game.add_move(&res.m);
+        }
+
+        let result = game.outcome().unwrap_or(bb::GameOutcome::Draw).value() as f32;
+        SelfPlay { result, positions }
+    }
+
+    pub fn do_game(
+        env: &ag::VariableEnvironment<nn::Float>,
+        model: &nn::KhetModel,
+    ) -> Vec<SelfPlay> {
+        let res = Arc::new(Mutex::new(Vec::new()));
+        let env = Arc::new(Mutex::new(env.clone()));
+        let done: AtomicUsize = AtomicUsize::new(0);
+
+        (0..20).into_par_iter().for_each(|_| {
+            let my_env = env.lock().unwrap().clone();
+            let my_res = run_self_play(&my_env, model);
+            print!("{}", done.fetch_add(1, Ordering::Relaxed) + 1);
+            std::io::stdout().lock().flush().unwrap();
+            res.lock().unwrap().push(my_res);
+        });
+        println!("\nall done");
+
+        Arc::try_unwrap(res).unwrap().into_inner().unwrap()
     }
 }
