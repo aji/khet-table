@@ -1,3 +1,4 @@
+use autograd as ag;
 use std::fmt;
 
 macro_rules! bb_dbg {
@@ -228,22 +229,18 @@ impl Board {
         }
     }
 
-    #[inline]
     pub fn white_to_move(&self) -> bool {
         (self.w & MASK_TO_MOVE) != 0
     }
 
-    #[inline]
     pub fn is_terminal(&self) -> bool {
         self.ph.count_ones() != 2
     }
 
-    #[inline]
     pub fn white_wins(&self) -> bool {
         (self.ph & self.r) == 0
     }
 
-    #[inline]
     pub fn my_pharaoh(&self) -> u128 {
         (if self.w & MASK_TO_MOVE != 0 {
             self.w
@@ -267,7 +264,6 @@ impl Board {
         }
     }
 
-    #[inline]
     pub fn movegen(&self) -> MoveSet {
         // pieces owned by the player who will move next
         let to_move = if self.w & MASK_TO_MOVE != 0 {
@@ -309,7 +305,6 @@ impl Board {
         )
     }
 
-    #[inline]
     pub fn apply_move(&mut self, m: &Move) {
         match m.dd {
             0 => {
@@ -338,8 +333,20 @@ impl Board {
         }
     }
 
-    #[inline]
     pub fn apply_laser_rule(&mut self) -> u128 {
+        let (kill, _) = self.calc_laser(self.white_to_move());
+
+        self.py &= !kill;
+        self.sc &= !kill;
+        self.an &= !kill;
+        self.ph &= !kill;
+        self.w &= !kill;
+        self.r &= !kill;
+
+        kill
+    }
+
+    pub fn calc_laser(&self, white: bool) -> (u128, u128) {
         // occupied squares
         let occ = self.py | self.sc | self.an | self.ph;
 
@@ -364,7 +371,7 @@ impl Board {
         bb_dbg!();
         bb_dbg!();
         bb_dbg!();
-        bb_dbg!("apply_laser_rule({:#?})", self);
+        bb_dbg!("calc_laser_rule({:#?})", self);
         bb_dbg!("occ  : {:#?}", BitboardPretty(occ));
         bb_dbg!("ne   : {:#?}", BitboardPretty(ne));
         bb_dbg!("se   : {:#?}", BitboardPretty(se));
@@ -381,11 +388,7 @@ impl Board {
         bb_dbg!();
 
         // the laser!
-        let mut laser = if self.w & MASK_TO_MOVE != 0 {
-            MASK_W_SPHINX
-        } else {
-            MASK_R_SPHINX
-        };
+        let mut laser = if white { MASK_W_SPHINX } else { MASK_R_SPHINX };
 
         // the laser dir!
         let mut dir = match (self.n & laser != 0, self.e & laser != 0) {
@@ -396,8 +399,11 @@ impl Board {
         };
 
         let mut kill = 0;
+        let mut path = 0;
 
         while laser != 0 {
+            path |= laser;
+
             laser = unsafe {
                 match dir {
                     DIR_N => laser.unchecked_shl(SHL_N as u128) & MASK_BOARD,
@@ -443,16 +449,10 @@ impl Board {
 
         bb_dbg!();
         bb_dbg!("kill={:#?}", BitboardPretty(kill));
+        bb_dbg!("path={:#?}", BitboardPretty(path));
         bb_dbg!();
 
-        self.py &= !kill;
-        self.sc &= !kill;
-        self.an &= !kill;
-        self.ph &= !kill;
-        self.w &= !kill;
-        self.r &= !kill;
-
-        kill
+        (kill, path)
     }
 
     pub fn switch_turn(&mut self) {
@@ -467,6 +467,54 @@ impl Board {
         self.r &= p | MASK_TO_MOVE;
         self.n &= p | MASK_W_SPHINX | MASK_R_SPHINX;
         self.e &= p | MASK_W_SPHINX | MASK_R_SPHINX;
+    }
+
+    pub fn nn_image(&self) -> ag::ndarray::Array3<f64> {
+        let mut img = ag::ndarray::Array3::zeros((20, 8, 10));
+
+        let mut write_channel = |ch: usize, x: u128| {
+            let mut m = 0x_0200_0000_0000_0000_0000_0000_0000_0000;
+            for r in 0..8 {
+                for c in 0..10 {
+                    img[(ch, r, c)] = if x & m != 0 { 1.0 } else { 0.0 };
+                    m >>= 1;
+                }
+                m >>= 6;
+            }
+        };
+
+        let b = if self.white_to_move() {
+            self.clone()
+        } else {
+            self.flip_and_rotate()
+        };
+
+        let w_laser = b.calc_laser(true);
+        let r_laser = b.calc_laser(false);
+
+        write_channel(0, b.w & b.py);
+        write_channel(1, b.w & b.sc);
+        write_channel(2, b.w & b.an);
+        write_channel(3, b.w & b.ph);
+        write_channel(4, b.w & b.n & b.e);
+        write_channel(5, b.w & !b.n & b.e);
+        write_channel(6, b.w & !b.n & !b.e);
+        write_channel(7, b.w & b.n & !b.e);
+        write_channel(8, MASK_W_OK);
+        write_channel(9, w_laser.0 | w_laser.1);
+
+        write_channel(10, b.r & b.py);
+        write_channel(11, b.r & b.sc);
+        write_channel(12, b.r & b.an);
+        write_channel(13, b.r & b.ph);
+        write_channel(14, b.r & b.n & b.e);
+        write_channel(15, b.r & !b.n & b.e);
+        write_channel(16, b.r & !b.n & !b.e);
+        write_channel(17, b.r & b.n & !b.e);
+        write_channel(18, MASK_R_OK);
+        write_channel(19, r_laser.0 | r_laser.1);
+
+        img
     }
 }
 
