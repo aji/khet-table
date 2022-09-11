@@ -646,7 +646,7 @@ impl Move {
         }
     }
 
-    pub fn nn_ith(&self, i: usize) -> Move {
+    pub fn nn_ith(i: usize) -> Move {
         let (j, x) = (i / 80, i % 80);
         let (r, c) = (x / 10, x % 10);
         let s = 1u128 << ((7 - r) * 16 + (9 - c));
@@ -782,21 +782,21 @@ impl MoveSet {
         res
     }
 
-    pub fn nn_mask(&self) -> ag::ndarray::Array1<nn::Float> {
-        let mut mask = ag::ndarray::Array1::zeros(800);
+    pub fn nn_valid(&self) -> Vec<usize> {
+        let mut res = Vec::new();
         for i in 0..=9 {
             let mut m = 0x_0200_0000_0000_0000_0000_0000_0000_0000;
             for r in 0..8 {
                 for c in 0..10 {
-                    let j = r * 10 + c;
-                    let x = self.0[j];
-                    mask[i * 80 + j] = if x & m != 0 { 1.0 } else { 0.0 };
+                    if self.0[i] & m != 0 {
+                        res.push(i * 80 + r * 10 + c);
+                    }
                     m >>= 1;
                 }
                 m >>= 6;
             }
         }
-        mask
+        res
     }
 }
 
@@ -887,6 +887,7 @@ impl Game {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub enum GameOutcome {
     Draw,
     WhiteWins,

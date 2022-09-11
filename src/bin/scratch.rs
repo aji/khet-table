@@ -1,4 +1,3 @@
-use ag::tensor_ops as T;
 use autograd as ag;
 
 use khet::bb;
@@ -7,20 +6,31 @@ use khet::nn;
 fn main() {
     let mut env = ag::VariableEnvironment::<nn::Float>::new();
 
-    let model = nn::default_model(&mut env);
-    let board = bb::Board::new_classic();
+    let model = nn::KhetModel::default(&mut env);
+    let mut game = bb::Game::new(bb::Board::new_classic());
+    let params = nn::search::Params {
+        c_base: 1.0,
+        c_init: 1.0,
+    };
 
-    env.run(|g| {
-        let x = T::reshape(T::convert_to_tensor(board.nn_image(), g), &[1, 20, 8, 10]);
+    while game.outcome().is_none() {
+        println!("\n\nMOVE {}\n{}", game.len_plys() / 2 + 1, game.latest());
+        let res = nn::search::run(
+            |stats: nn::search::Stats| {
+                if stats.iterations >= 80 {
+                    nn::search::Signal::Abort
+                } else {
+                    nn::search::Signal::Continue
+                }
+            },
+            &env,
+            &model,
+            &game,
+            &params,
+        );
+        game.add_move(&res.m);
+    }
 
-        // policy: [N, 800], value: [N]
-        let (policy, value) = model.eval(g, x);
-
-        // top: [N, 801]
-        let top = T::concat(&[policy, T::reshape(value, &[-1, 1])], 1);
-
-        println!("{:#?}", top.eval(g));
-    });
-
-    env.save("weights.json").unwrap();
+    println!("\n\n{}", game.latest());
+    println!("{:?}", game.outcome());
 }

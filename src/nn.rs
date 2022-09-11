@@ -1,20 +1,18 @@
-use ag::ndarray_ext::ArrayRng;
-use autograd as ag;
-
-use ag::tensor_ops as T;
-use ag::variable::{VariableID, VariableNamespaceMut};
-use rand::Rng;
-
-const N_FILTERS: usize = 32;
-const N_BLOCKS: usize = 8;
-const N_VALUE_HIDDEN: usize = 256;
-
-const N_MOVES: usize = 800;
-const N_ROWS: usize = 8;
-const N_COLS: usize = 10;
-const N_INPUT_PLANES: usize = 20;
-
 pub type Float = f32;
+
+pub use constants::*;
+pub use model::KhetModel;
+
+pub mod constants {
+    pub const N_FILTERS: usize = 32;
+    pub const N_BLOCKS: usize = 8;
+    pub const N_VALUE_HIDDEN: usize = 256;
+
+    pub const N_MOVES: usize = 800;
+    pub const N_ROWS: usize = 8;
+    pub const N_COLS: usize = 10;
+    pub const N_INPUT_PLANES: usize = 20;
+}
 
 /*
 
@@ -49,272 +47,473 @@ for various values of bxn,v:
 
 */
 
-fn relu_norm_conv_2d<'g, X, W>(x: X, w: W, pad: usize, stride: usize) -> ag::Tensor<'g, Float>
-where
-    X: AsRef<ag::Tensor<'g, Float>> + Copy,
-    W: AsRef<ag::Tensor<'g, Float>> + Copy,
-{
-    T::relu(T::normalize(T::conv2d(x, w, pad, stride), &[0, 2, 3]))
-}
+pub mod model {
+    use ag::ndarray_ext::ArrayRng;
+    use autograd as ag;
 
-// w: [i, j], x: [batches, j], returns [batches, i]
-fn linear<'g, W, X>(w: W, x: X) -> ag::Tensor<'g, Float>
-where
-    W: AsRef<ag::Tensor<'g, Float>> + Copy,
-    X: AsRef<ag::Tensor<'g, Float>> + Copy,
-{
-    T::matmul(x, T::transpose(w, &[1, 0]))
-}
+    use ag::tensor_ops as T;
+    use ag::variable::{VariableID, VariableNamespaceMut};
+    use rand::Rng;
 
-struct InputToRes {
-    conv: VariableID,
-}
+    use super::constants::*;
+    use super::Float;
 
-impl InputToRes {
-    fn new<'env, 'name, R: Rng>(
-        mut ns: VariableNamespaceMut<'env, 'name, Float>,
-        rng: &ArrayRng<Float, R>,
-        n_filters: usize,
-    ) -> InputToRes {
-        let shape = &[n_filters, N_INPUT_PLANES, 3, 3];
-        InputToRes {
-            conv: ns.slot().name("conv").set(rng.standard_normal(shape)),
-        }
+    fn relu_norm_conv_2d<'g, X, W>(x: X, w: W, pad: usize, stride: usize) -> ag::Tensor<'g, Float>
+    where
+        X: AsRef<ag::Tensor<'g, Float>> + Copy,
+        W: AsRef<ag::Tensor<'g, Float>> + Copy,
+    {
+        T::relu(T::normalize(T::conv2d(x, w, pad, stride), &[0, 2, 3]))
     }
 
-    // in [batch, N_INPUT_PLANES, N_ROWS, N_COLS]
-    // out [batch, n_filters, N_ROWS, N_COLS]
-    fn eval<'env, 'name, 'g>(
-        &self,
-        ctx: &'g ag::Context<'env, 'name, Float>,
-        x: ag::Tensor<'g, Float>,
-    ) -> ag::Tensor<'g, Float> {
-        relu_norm_conv_2d(x, ctx.variable_by_id(self.conv), 1, 1)
-    }
-}
-
-struct ResBlock {
-    conv1: VariableID,
-    conv2: VariableID,
-}
-
-impl ResBlock {
-    fn new<'env, 'name, R: Rng>(
-        mut ns: VariableNamespaceMut<'env, 'name, Float>,
-        rng: &ArrayRng<Float, R>,
-        n_filters: usize,
-    ) -> ResBlock {
-        let shape = &[n_filters, n_filters, 3, 3];
-        ResBlock {
-            conv1: ns.slot().name("conv1").set(rng.standard_normal(shape)),
-            conv2: ns.slot().name("conv2").set(rng.standard_normal(shape)),
-        }
+    // w: [i, j], x: [batches, j], returns [batches, i]
+    fn linear<'g, W, X>(w: W, x: X) -> ag::Tensor<'g, Float>
+    where
+        W: AsRef<ag::Tensor<'g, Float>> + Copy,
+        X: AsRef<ag::Tensor<'g, Float>> + Copy,
+    {
+        T::matmul(x, T::transpose(w, &[1, 0]))
     }
 
-    // in [batch, n_filters, N_ROWS, N_COLS]
-    // out [batch, n_filters, N_ROWS, N_COLS]
-    fn eval<'env, 'name, 'g>(
-        &self,
-        ctx: &'g ag::Context<'env, 'name, Float>,
-        x0: ag::Tensor<'g, Float>,
-    ) -> ag::Tensor<'g, Float> {
-        // This is a slight deviation from AlphaZero[1] and AlphaGo Zero[2]. In
-        // AGZ they apply the skip connection before the ReLU. Here I'm doing
-        // ReLU first before adding it back to the residual stream. In the
-        // Architecture section, the AlphaZero paper cites [3] which suggests
-        // that putting the ReLU before the residual connection results in
-        // better performance, but they also say they used the same architecture
-        // as AGZ, which doesn't seem to do this. I'm going to wing it and hope
-        // it does better.
-        //
-        // [1] "A general reinforcement learning algorithm that masters chess,
-        // shogi and Go through self-play", D. Silver, et al
-        // https://discovery.ucl.ac.uk/id/eprint/10069050/1/alphazero_preprint.pdf
-        // [2] "Mastering the game of Go without human knowledge" D. Silver, et
-        // al https://www.deepmind.com/blog/alphago-zero-starting-from-scratch
-        // [3] "Identity Mappings in Deep Residual Networks", K. He, X. Zhang,
-        // S. Ren, J. Sun https://arxiv.org/pdf/1603.05027.pdf
-
-        let x1 = relu_norm_conv_2d(x0, ctx.variable_by_id(self.conv1), 1, 1);
-        let x2 = relu_norm_conv_2d(x1, ctx.variable_by_id(self.conv2), 1, 1);
-        x0 + x2
-    }
-}
-
-struct PolicyHead {
-    conv: VariableID,
-    fc: VariableID,
-}
-
-impl PolicyHead {
-    fn new<'env, 'name, R: Rng>(
-        mut ns: VariableNamespaceMut<'env, 'name, Float>,
-        rng: &ArrayRng<Float, R>,
-        n_filters: usize,
-    ) -> PolicyHead {
-        PolicyHead {
-            conv: ns
-                .slot()
-                .name("conv")
-                .set(rng.standard_normal(&[2, n_filters, 1, 1])),
-            fc: ns
-                .slot()
-                .name("fc")
-                .set(rng.glorot_uniform(&[N_MOVES, 2 * N_ROWS * N_COLS])),
-        }
+    struct InputToRes {
+        conv: VariableID,
     }
 
-    // in [batch, n_filters, N_ROWS, N_COLS]
-    // out [batch, N_MOVES]
-    fn eval<'env, 'name, 'g>(
-        &self,
-        ctx: &'g ag::Context<'env, 'name, Float>,
-        x: &ag::Tensor<'g, Float>,
-    ) -> ag::Tensor<'g, Float> {
-        let x = relu_norm_conv_2d(x, ctx.variable_by_id(self.conv), 0, 1);
-        let x = T::reshape(x, &[-1, (2 * N_ROWS * N_COLS) as isize]);
-        let x = linear(ctx.variable_by_id(self.fc), x);
-        T::reshape(x, &[-1, N_MOVES as isize])
-    }
-}
-
-struct ValueHead {
-    conv: VariableID,
-    fc1: VariableID,
-    fc2: VariableID,
-}
-
-impl ValueHead {
-    fn new<'env, 'name, R: Rng>(
-        mut ns: VariableNamespaceMut<'env, 'name, Float>,
-        rng: &ArrayRng<Float, R>,
-        n_filters: usize,
-        n_hidden: usize,
-    ) -> ValueHead {
-        ValueHead {
-            conv: ns
-                .slot()
-                .name("conv")
-                .set(rng.standard_normal(&[1, n_filters, 1, 1])),
-            fc1: ns
-                .slot()
-                .name("fc1")
-                .set(rng.glorot_uniform(&[n_hidden, N_ROWS * N_COLS])),
-            fc2: ns.slot().name("fc2").set(rng.random_uniform(
-                &[1, n_hidden],
-                -1.0 / n_hidden as f64,
-                1.0 / n_hidden as f64,
-            )),
-        }
-    }
-
-    // in [batch, n_filters, N_ROWS, N_COLS]
-    // out [batch]
-    fn eval<'env, 'name, 'g>(
-        &self,
-        ctx: &'g ag::Context<'env, 'name, Float>,
-        x: &ag::Tensor<'g, Float>,
-    ) -> ag::Tensor<'g, Float> {
-        let x = T::relu(T::conv2d(x, ctx.variable_by_id(self.conv), 0, 1));
-        let x = T::reshape(x, &[-1, (N_ROWS * N_COLS) as isize]);
-        let x = T::relu(linear(ctx.variable_by_id(self.fc1), x));
-        let x = T::tanh(linear(ctx.variable_by_id(self.fc2), x));
-        T::reshape(x, &[-1])
-    }
-}
-
-pub struct KhetModel {
-    input_to_res: InputToRes,
-    res_blocks: Vec<ResBlock>,
-    policy_head: PolicyHead,
-    value_head: ValueHead,
-}
-
-const RES_NAMES: [&'static str; 20] = [
-    "res0", "res1", "res2", "res3", "res4", "res5", "res6", "res7", "res8", "res9", "res10",
-    "res11", "res12", "res13", "res14", "res15", "res16", "res17", "res18", "res19",
-];
-
-impl KhetModel {
-    pub fn new<R: Rng>(
-        env: &mut ag::VariableEnvironment<Float>,
-        rng: &ArrayRng<Float, R>,
-        n_filters: usize,
-        n_blocks: usize,
-        n_value_hidden: usize,
-    ) -> KhetModel {
-        KhetModel {
-            input_to_res: InputToRes::new(env.namespace_mut("input"), rng, n_filters),
-            res_blocks: (0..n_blocks)
-                .map(|i| ResBlock::new(env.namespace_mut(RES_NAMES[i]), rng, n_filters))
-                .collect(),
-            policy_head: PolicyHead::new(env.namespace_mut("policy"), rng, n_filters),
-            value_head: ValueHead::new(env.namespace_mut("value"), rng, n_filters, n_value_hidden),
-        }
-    }
-
-    // in [batch, N_INPUT_PLANES, N_ROWS, N_COLS]
-    // out ([batch, N_MOVES], [batch])
-    pub fn eval<'env, 'name, 'g>(
-        &self,
-        ctx: &'g ag::Context<'env, 'name, Float>,
-        input: ag::Tensor<'g, Float>,
-    ) -> (ag::Tensor<'g, Float>, ag::Tensor<'g, Float>) {
-        let res = {
-            let mut res = self.input_to_res.eval(ctx, input);
-            for block in self.res_blocks.iter() {
-                res = block.eval(ctx, res);
+    impl InputToRes {
+        fn new<'env, 'name, R: Rng>(
+            mut ns: VariableNamespaceMut<'env, 'name, Float>,
+            rng: &ArrayRng<Float, R>,
+            n_filters: usize,
+        ) -> InputToRes {
+            let shape = &[n_filters, N_INPUT_PLANES, 3, 3];
+            InputToRes {
+                conv: ns.slot().name("conv").set(rng.standard_normal(shape)),
             }
-            res
-        };
+        }
 
-        let policy = self.policy_head.eval(ctx, &res);
-        let value = self.value_head.eval(ctx, &res);
+        // in [batch, N_INPUT_PLANES, N_ROWS, N_COLS]
+        // out [batch, n_filters, N_ROWS, N_COLS]
+        fn eval<'env, 'name, 'g>(
+            &self,
+            ctx: &'g ag::Context<'env, 'name, Float>,
+            x: ag::Tensor<'g, Float>,
+        ) -> ag::Tensor<'g, Float> {
+            relu_norm_conv_2d(x, ctx.variable_by_id(self.conv), 1, 1)
+        }
+    }
 
-        (policy, value)
+    struct ResBlock {
+        conv1: VariableID,
+        conv2: VariableID,
+    }
+
+    impl ResBlock {
+        fn new<'env, 'name, R: Rng>(
+            mut ns: VariableNamespaceMut<'env, 'name, Float>,
+            rng: &ArrayRng<Float, R>,
+            n_filters: usize,
+        ) -> ResBlock {
+            let shape = &[n_filters, n_filters, 3, 3];
+            ResBlock {
+                conv1: ns.slot().name("conv1").set(rng.standard_normal(shape)),
+                conv2: ns.slot().name("conv2").set(rng.standard_normal(shape)),
+            }
+        }
+
+        // in [batch, n_filters, N_ROWS, N_COLS]
+        // out [batch, n_filters, N_ROWS, N_COLS]
+        fn eval<'env, 'name, 'g>(
+            &self,
+            ctx: &'g ag::Context<'env, 'name, Float>,
+            x0: ag::Tensor<'g, Float>,
+        ) -> ag::Tensor<'g, Float> {
+            // This is a slight deviation from AlphaZero[1] and AlphaGo Zero[2]. In
+            // AGZ they apply the skip connection before the ReLU. Here I'm doing
+            // ReLU first before adding it back to the residual stream. In the
+            // Architecture section, the AlphaZero paper cites [3] which suggests
+            // that putting the ReLU before the residual connection results in
+            // better performance, but they also say they used the same architecture
+            // as AGZ, which doesn't seem to do this. I'm going to wing it and hope
+            // it does better.
+            //
+            // [1] "A general reinforcement learning algorithm that masters chess,
+            // shogi and Go through self-play", D. Silver, et al
+            // https://discovery.ucl.ac.uk/id/eprint/10069050/1/alphazero_preprint.pdf
+            // [2] "Mastering the game of Go without human knowledge" D. Silver, et
+            // al https://www.deepmind.com/blog/alphago-zero-starting-from-scratch
+            // [3] "Identity Mappings in Deep Residual Networks", K. He, X. Zhang,
+            // S. Ren, J. Sun https://arxiv.org/pdf/1603.05027.pdf
+
+            let x1 = relu_norm_conv_2d(x0, ctx.variable_by_id(self.conv1), 1, 1);
+            let x2 = relu_norm_conv_2d(x1, ctx.variable_by_id(self.conv2), 1, 1);
+            x0 + x2
+        }
+    }
+
+    struct PolicyHead {
+        conv: VariableID,
+        fc: VariableID,
+    }
+
+    impl PolicyHead {
+        fn new<'env, 'name, R: Rng>(
+            mut ns: VariableNamespaceMut<'env, 'name, Float>,
+            rng: &ArrayRng<Float, R>,
+            n_filters: usize,
+        ) -> PolicyHead {
+            PolicyHead {
+                conv: ns
+                    .slot()
+                    .name("conv")
+                    .set(rng.standard_normal(&[2, n_filters, 1, 1])),
+                fc: ns
+                    .slot()
+                    .name("fc")
+                    .set(rng.glorot_uniform(&[N_MOVES, 2 * N_ROWS * N_COLS])),
+            }
+        }
+
+        // in [batch, n_filters, N_ROWS, N_COLS]
+        // out [batch, N_MOVES]
+        fn eval<'env, 'name, 'g>(
+            &self,
+            ctx: &'g ag::Context<'env, 'name, Float>,
+            x: &ag::Tensor<'g, Float>,
+        ) -> ag::Tensor<'g, Float> {
+            let x = relu_norm_conv_2d(x, ctx.variable_by_id(self.conv), 0, 1);
+            let x = T::reshape(x, &[-1, (2 * N_ROWS * N_COLS) as isize]);
+            let x = linear(ctx.variable_by_id(self.fc), x);
+            T::reshape(x, &[-1, N_MOVES as isize])
+        }
+    }
+
+    struct ValueHead {
+        conv: VariableID,
+        fc1: VariableID,
+        fc2: VariableID,
+    }
+
+    impl ValueHead {
+        fn new<'env, 'name, R: Rng>(
+            mut ns: VariableNamespaceMut<'env, 'name, Float>,
+            rng: &ArrayRng<Float, R>,
+            n_filters: usize,
+            n_hidden: usize,
+        ) -> ValueHead {
+            ValueHead {
+                conv: ns
+                    .slot()
+                    .name("conv")
+                    .set(rng.standard_normal(&[1, n_filters, 1, 1])),
+                fc1: ns
+                    .slot()
+                    .name("fc1")
+                    .set(rng.glorot_uniform(&[n_hidden, N_ROWS * N_COLS])),
+                fc2: ns.slot().name("fc2").set(rng.random_uniform(
+                    &[1, n_hidden],
+                    -1.0 / n_hidden as f64,
+                    1.0 / n_hidden as f64,
+                )),
+            }
+        }
+
+        // in [batch, n_filters, N_ROWS, N_COLS]
+        // out [batch]
+        fn eval<'env, 'name, 'g>(
+            &self,
+            ctx: &'g ag::Context<'env, 'name, Float>,
+            x: &ag::Tensor<'g, Float>,
+        ) -> ag::Tensor<'g, Float> {
+            let x = T::relu(T::conv2d(x, ctx.variable_by_id(self.conv), 0, 1));
+            let x = T::reshape(x, &[-1, (N_ROWS * N_COLS) as isize]);
+            let x = T::relu(linear(ctx.variable_by_id(self.fc1), x));
+            let x = T::tanh(linear(ctx.variable_by_id(self.fc2), x));
+            T::reshape(x, &[-1])
+        }
+    }
+
+    pub struct KhetModel {
+        input_to_res: InputToRes,
+        res_blocks: Vec<ResBlock>,
+        policy_head: PolicyHead,
+        value_head: ValueHead,
+    }
+
+    const RES_NAMES: [&'static str; 20] = [
+        "res0", "res1", "res2", "res3", "res4", "res5", "res6", "res7", "res8", "res9", "res10",
+        "res11", "res12", "res13", "res14", "res15", "res16", "res17", "res18", "res19",
+    ];
+
+    impl KhetModel {
+        pub fn new<R: Rng>(
+            env: &mut ag::VariableEnvironment<Float>,
+            rng: &ArrayRng<Float, R>,
+            n_filters: usize,
+            n_blocks: usize,
+            n_value_hidden: usize,
+        ) -> KhetModel {
+            KhetModel {
+                input_to_res: InputToRes::new(env.namespace_mut("input"), rng, n_filters),
+                res_blocks: (0..n_blocks)
+                    .map(|i| ResBlock::new(env.namespace_mut(RES_NAMES[i]), rng, n_filters))
+                    .collect(),
+                policy_head: PolicyHead::new(env.namespace_mut("policy"), rng, n_filters),
+                value_head: ValueHead::new(
+                    env.namespace_mut("value"),
+                    rng,
+                    n_filters,
+                    n_value_hidden,
+                ),
+            }
+        }
+
+        pub fn default(env: &mut ag::VariableEnvironment<Float>) -> KhetModel {
+            KhetModel::new(
+                env,
+                &ArrayRng::default(),
+                N_FILTERS,
+                N_BLOCKS,
+                N_VALUE_HIDDEN,
+            )
+        }
+
+        // in [batch, N_INPUT_PLANES, N_ROWS, N_COLS]
+        // out ([batch, N_MOVES], [batch])
+        pub fn eval<'env, 'name, 'g>(
+            &self,
+            ctx: &'g ag::Context<'env, 'name, Float>,
+            input: ag::Tensor<'g, Float>,
+        ) -> (ag::Tensor<'g, Float>, ag::Tensor<'g, Float>) {
+            let res = {
+                let mut res = self.input_to_res.eval(ctx, input);
+                for block in self.res_blocks.iter() {
+                    res = block.eval(ctx, res);
+                }
+                res
+            };
+
+            let policy = self.policy_head.eval(ctx, &res);
+            let value = self.value_head.eval(ctx, &res);
+
+            (policy, value)
+        }
     }
 }
 
-pub fn default_model(env: &mut ag::VariableEnvironment<Float>) -> KhetModel {
-    KhetModel::new(
-        env,
-        &ArrayRng::default(),
-        N_FILTERS,
-        N_BLOCKS,
-        N_VALUE_HIDDEN,
-    )
-}
+pub mod search {
+    use crate::{bb, nn};
+    use ag::tensor_ops as T;
+    use autograd as ag;
 
-#[cfg(test)]
-mod tests {
-    use test::{black_box, Bencher};
+    #[derive(Copy, Clone, Debug)]
+    pub struct Params {
+        pub c_base: f32,
+        pub c_init: f32,
+    }
 
-    use super::*;
-    use crate::bb;
+    impl Default for Params {
+        fn default() -> Params {
+            Params {
+                c_base: 1.0,
+                c_init: 1.0,
+            }
+        }
+    }
 
-    #[bench]
-    fn bench_nn_forward(b: &mut Bencher) {
-        let (env, model) = {
-            let mut env = ag::VariableEnvironment::<Float>::new();
-            let model = default_model(&mut env);
-            (env, model)
-        };
+    #[derive(Clone, Debug)]
+    pub struct Stats {
+        pub iterations: usize,
+        pub policy: Vec<f32>,
+    }
 
-        env.run(|g| {
-            let img = g.placeholder("img", &[20, 8, 10]);
-            let x = T::reshape(img, &[1, 20, 8, 10]);
-            let (policy, value) = model.eval(g, x);
-            let top = T::concat(&[policy, T::reshape(value, &[-1, 1])], 1);
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    pub enum Signal {
+        Continue,
+        Abort,
+    }
 
-            b.iter(|| {
-                let board = bb::Board::new_classic();
-                black_box(
-                    g.evaluator()
-                        .push(top)
-                        .feed("img", board.nn_image().view())
-                        .run(),
-                );
+    pub trait Context {
+        fn defer(&self, stats: Stats) -> Signal;
+    }
+
+    impl<F> Context for F
+    where
+        F: Fn(Stats) -> Signal,
+    {
+        fn defer(&self, stats: Stats) -> Signal {
+            (*self)(stats)
+        }
+    }
+
+    pub struct Output {
+        pub m: bb::Move,
+        pub policy: Vec<f32>,
+        pub value: f32,
+    }
+
+    pub fn run<C: Context>(
+        ctx: C,
+        env: &ag::VariableEnvironment<nn::Float>,
+        model: &nn::KhetModel,
+        game: &bb::Game,
+        params: &Params,
+    ) -> Output {
+        let mut iters = 0;
+        let mut root = Node::new(*game.latest(), 0.0, 0);
+
+        loop {
+            iters += 1;
+            root.expand(env, model, params, game.clone());
+
+            let signal = ctx.defer(Stats {
+                iterations: iters,
+                policy: root.implied_policy(),
             });
-        });
+            if let Signal::Abort = signal {
+                break;
+            }
+        }
+
+        let max_child = root.max_child_by_visits().expect("root has no children");
+
+        Output {
+            m: bb::Move::nn_ith(max_child.index),
+            policy: root.implied_policy(),
+            value: max_child.node.expected_value(),
+        }
+    }
+
+    struct Node {
+        board: bb::Board,
+        total_value: f32,
+        visits: usize,
+        children: Vec<Edge>,
+    }
+
+    struct Edge {
+        index: usize,
+        prior: f32,
+        node: Node,
+    }
+
+    impl Node {
+        fn new(board: bb::Board, total_value: f32, visits: usize) -> Node {
+            Node {
+                board,
+                total_value,
+                visits,
+                children: Vec::new(),
+            }
+        }
+
+        fn is_leaf(&self) -> bool {
+            self.children.len() == 0
+        }
+
+        fn expected_value(&self) -> f32 {
+            self.total_value / self.visits as f32
+        }
+
+        fn implied_policy(&self) -> Vec<f32> {
+            let mut policy: Vec<f32> = (0..nn::N_MOVES).map(|_| 0.0).collect();
+            for e in self.children.iter() {
+                policy[e.index] = e.node.visits as f32;
+            }
+            let total: f32 = policy.iter().sum();
+            policy.iter_mut().for_each(|x| *x /= total);
+            policy
+        }
+
+        fn max_child_by_visits(&self) -> Option<&Edge> {
+            self.children.iter().max_by_key(|e| e.node.visits)
+        }
+
+        fn max_child_by_puct_mut(&mut self, params: &Params, invert: bool) -> Option<&mut Edge> {
+            let visit_count = self.visits;
+            self.children
+                .iter_mut()
+                .map(|e| {
+                    let puct = e.puct(params, visit_count, invert);
+                    (e, puct)
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|a| a.0)
+        }
+
+        fn initialize_children(
+            &mut self,
+            env: &ag::VariableEnvironment<nn::Float>,
+            model: &nn::KhetModel,
+        ) -> f32 {
+            let res = env.run(|g| {
+                let img = T::convert_to_tensor(self.board.nn_image(), g);
+                let (policy, value) = model.eval(g, T::reshape(img, &[1, 20, 8, 10]));
+                let policy = T::softmax(T::reshape(policy, &[800]), 0);
+                let value = T::reshape(value, &[1]);
+                T::concat(&[policy, value], 0).eval(g).unwrap()
+            });
+
+            let valid = self.board.movegen().nn_valid();
+            let total: f32 = valid.iter().map(|i| res[*i]).sum();
+            let value: f32 = res[nn::N_MOVES];
+
+            self.children = valid
+                .iter()
+                .copied()
+                .map(|index| {
+                    let prior = res[index] / total;
+                    let board = {
+                        let mut board = self.board.clone();
+                        board.apply_move(&bb::Move::nn_ith(index));
+                        board.apply_laser_rule();
+                        board.switch_turn();
+                        board
+                    };
+                    Edge {
+                        index,
+                        prior,
+                        node: Node::new(board, value, 1),
+                    }
+                })
+                .collect();
+
+            res[nn::N_MOVES]
+        }
+
+        fn expand(
+            &mut self,
+            env: &ag::VariableEnvironment<nn::Float>,
+            model: &nn::KhetModel,
+            params: &Params,
+            mut game: bb::Game,
+        ) -> f32 {
+            let value = if let Some(outcome) = game.outcome() {
+                outcome.value() as f32
+            } else if self.is_leaf() {
+                self.initialize_children(env, model)
+            } else {
+                let e = self
+                    .max_child_by_puct_mut(params, game.len_plys() % 2 == 1)
+                    .unwrap();
+                game.add_board(e.node.board);
+                e.node.expand(env, model, params, game)
+            };
+
+            self.visits += 1;
+            self.total_value += value;
+
+            value
+        }
+    }
+
+    impl Edge {
+        fn puct(&self, params: &Params, parent_visits: usize, invert: bool) -> f32 {
+            let n_tot = parent_visits as f32;
+            let n = self.node.visits as f32;
+            let q = if invert { -1.0 } else { 1.0 } * self.node.total_value / n;
+            let c = ((1.0 + n_tot + params.c_base) / params.c_base).ln() + params.c_init;
+            let u = c * self.prior * n_tot.sqrt() / (1.0 + n);
+            q + u
+        }
     }
 }
