@@ -4,8 +4,8 @@ pub use constants::*;
 pub use model::KhetModel;
 
 pub mod constants {
-    pub const N_FILTERS: usize = 16;
-    pub const N_BLOCKS: usize = 2;
+    pub const N_FILTERS: usize = 24;
+    pub const N_BLOCKS: usize = 4;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
@@ -646,6 +646,14 @@ pub mod train {
             std::io::stdout().lock().flush().unwrap();
             game.add_move(&res.m);
         }
+
+        match game.outcome() {
+            None => print!("T"),
+            Some(bb::GameOutcome::Draw) => print!("D"),
+            Some(bb::GameOutcome::WhiteWins) => print!("W"),
+            Some(bb::GameOutcome::RedWins) => print!("R"),
+        }
+        std::io::stdout().lock().flush().unwrap();
 
         let result = game.outcome().unwrap_or(bb::GameOutcome::Draw).value() as f32;
         SelfPlay {
