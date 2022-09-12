@@ -1,7 +1,7 @@
 use autograd as ag;
 use std::fmt;
 
-use crate::nn;
+use crate::nn::{self, N_INPUT_PLANES};
 
 macro_rules! bb_dbg {
     () => {};
@@ -472,7 +472,7 @@ impl Board {
     }
 
     pub fn nn_image(&self) -> ag::ndarray::Array3<nn::Float> {
-        let mut img = ag::ndarray::Array3::zeros((20, 8, 10));
+        let mut img = ag::ndarray::Array3::zeros((N_INPUT_PLANES, 8, 10));
 
         let mut write_channel = |ch: usize, x: u128| {
             let mut m = 0x_0200_0000_0000_0000_0000_0000_0000_0000;
@@ -518,6 +518,9 @@ impl Board {
         write_channel(17, b.r & b.n & !b.e);
         write_channel(18, MASK_R_OK);
         write_channel(19, r_laser.0 | r_laser.1);
+
+        write_channel(20, if self.white_to_move() { MASK_BOARD } else { 0 });
+        write_channel(21, if self.white_to_move() { 0 } else { MASK_BOARD });
 
         img
     }

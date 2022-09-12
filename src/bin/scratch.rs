@@ -27,9 +27,9 @@ fn main() {
             p2,
             20,
             FischerClockConfig::new(
-                Duration::from_secs_f64(20.0),
-                Duration::from_secs_f64(1.0),
-                Duration::from_secs_f64(20.0),
+                Duration::from_secs_f64(10.0),
+                Duration::from_secs_f64(0.1),
+                Duration::from_secs_f64(10.0),
             ),
             100,
             |stats: Stats| {
@@ -55,7 +55,7 @@ fn main() {
         {
             Ok(mut f) => write!(
                 f,
-                "{},{},{},{},{}",
+                "{},{},{},{},{}\n",
                 train_start.elapsed().as_secs_f64(),
                 out.p1_win,
                 out.p1_draw,

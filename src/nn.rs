@@ -4,19 +4,21 @@ pub use constants::*;
 pub use model::KhetModel;
 
 pub mod constants {
-    pub const N_FILTERS: usize = 24;
-    pub const N_BLOCKS: usize = 6;
+    pub const N_FILTERS: usize = 16;
+    pub const N_BLOCKS: usize = 2;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
     pub const N_ROWS: usize = 8;
     pub const N_COLS: usize = 10;
-    pub const N_INPUT_PLANES: usize = 20;
+    pub const N_INPUT_PLANES: usize = 22;
 
-    pub const TRAIN_ITERS: usize = 500;
-    pub const BATCH_SIZE: usize = 500;
-    pub const WEIGHT_DECAY: f32 = 0.05;
-    pub const LR: f32 = 0.1;
+    pub const LEAK: f32 = 0.05;
+
+    pub const TRAIN_ITERS: usize = 50;
+    pub const BATCH_SIZE: usize = 2000;
+    pub const WEIGHT_DECAY: f32 = 0.001;
+    pub const LR: f32 = 0.002;
 }
 
 /*
@@ -57,7 +59,7 @@ pub mod model {
     use autograd as ag;
 
     use ag::tensor_ops as T;
-    use ag::variable::{VariableID, VariableNamespaceMut};
+    use ag::variable::{NamespaceTrait, VariableID, VariableNamespaceMut};
     use rand::Rng;
 
     use super::constants::*;
@@ -80,7 +82,7 @@ pub mod model {
         } else {
             x
         };
-        T::relu(x)
+        T::leaky_relu(x, LEAK)
     }
 
     // w: [i, j], x: [batches, j], returns [batches, i]
@@ -260,7 +262,7 @@ pub mod model {
         ) -> ag::Tensor<'g, Float> {
             let x = relu_norm_conv_2d(training, x, ctx.variable_by_id(self.conv), 0, 1);
             let x = T::reshape(x, &[-1, (N_ROWS * N_COLS) as isize]);
-            let x = T::relu(linear(ctx.variable_by_id(self.fc1), x));
+            let x = T::leaky_relu(linear(ctx.variable_by_id(self.fc1), x), LEAK);
             let x = T::tanh(linear(ctx.variable_by_id(self.fc2), x));
             T::reshape(x, &[-1])
         }
@@ -346,6 +348,16 @@ pub mod model {
             ns.push(env.namespace("value"));
             ns.into_iter()
         }
+
+        pub fn variables<'g, 'name>(
+            &self,
+            env: &'g ag::VariableEnvironment<'name, Float>,
+        ) -> Vec<ag::variable::VariableID> {
+            self.namespaces(&env)
+                .map(|ns| ns.current_var_ids().into_iter())
+                .flatten()
+                .collect()
+        }
     }
 }
 
@@ -353,6 +365,8 @@ pub mod search {
     use crate::{bb, nn};
     use ag::tensor_ops as T;
     use autograd as ag;
+
+    use super::N_INPUT_PLANES;
 
     #[derive(Copy, Clone, Debug)]
     pub struct Params {
@@ -525,7 +539,11 @@ pub mod search {
         ) -> f32 {
             let res = env.run(|g| {
                 let img = T::convert_to_tensor(self.board.nn_image(), g);
-                let (policy, value) = model.eval(false, g, T::reshape(img, &[1, 20, 8, 10]));
+                let (policy, value) = model.eval(
+                    false,
+                    g,
+                    T::reshape(img, &[1, N_INPUT_PLANES as isize, 8, 10]),
+                );
                 let policy = T::softmax(T::reshape(policy, &[800]), 0);
                 let value = T::reshape(value, &[1]);
                 T::concat(&[policy, value], 0).eval(g).unwrap()
@@ -604,7 +622,7 @@ pub mod search {
     impl Edge {
         fn puct(&self, params: &Params, parent_visits: usize, invert: bool, is_root: bool) -> f32 {
             let prior = if params.training && is_root {
-                rand::random::<f32>() * 0.05
+                self.prior + rand::random::<f32>() * 0.01
             } else {
                 self.prior
             };
@@ -614,7 +632,7 @@ pub mod search {
             let q = if invert { -1.0 } else { 1.0 } * self.node.total_value / n;
             let c = ((1.0 + n_tot + params.c_base) / params.c_base).ln() + params.c_init;
             let u = c * prior * n_tot.sqrt() / (1.0 + n);
-            q + u
+            (q + 1.0) / 2.0 + u
         }
     }
 }
@@ -627,7 +645,7 @@ pub mod train {
     };
 
     use crate::{bb, nn};
-    use ag::{prelude::Optimizer, tensor_ops as T, variable::NamespaceTrait};
+    use ag::tensor_ops as T;
     use autograd as ag;
 
     use nn::*;
@@ -697,15 +715,13 @@ pub mod train {
         }
     }
 
-    fn update_weights(
+    fn update_weights<O: ag::optimizers::Optimizer<nn::Float>>(
         env: &ag::VariableEnvironment<nn::Float>,
         model: &nn::KhetModel,
         examples: &[SelfPlayExample],
-        lr: f32,
+        opt: &O,
     ) {
         use ag::ndarray as nd;
-
-        let opt = ag::optimizers::SGD::new(lr);
 
         let positions: Vec<(nd::Array3<Float>, nd::Array1<Float>, Float)> = examples
             .iter()
@@ -730,14 +746,13 @@ pub mod train {
         };
 
         env.run(|g| {
-            let ex_input_t = g.placeholder("input", &[-1, 20, 8, 10]);
+            let ex_input_t = g.placeholder("input", &[-1, N_INPUT_PLANES as isize, 8, 10]);
             let ex_policy_t = g.placeholder("policy", &[-1, 800]);
             let ex_value_t = g.placeholder("value", &[-1]);
 
             let vars: Vec<_> = model
-                .namespaces(&env)
-                .map(|ns| ns.current_var_ids().into_iter())
-                .flatten()
+                .variables(&env)
+                .into_iter()
                 .map(|id| g.variable_by_id(id))
                 .collect();
 
@@ -805,6 +820,12 @@ pub mod train {
         batch_size: usize,
         lr: f32,
     ) -> () {
+        let opt = {
+            let mut env = env.lock().unwrap();
+            let vars = model.variables(&env);
+            ag::optimizers::adagrad::AdaGrad::new(lr, vars, &mut env, "adagrad")
+        };
+
         loop {
             let batch = {
                 let mut batch = Vec::new();
@@ -813,11 +834,11 @@ pub mod train {
                 }
                 batch
             };
-            update_weights(&mut env.lock().unwrap(), model, &batch[..], lr);
+            update_weights(&mut env.lock().unwrap(), model, &batch[..], &opt);
             env.lock().unwrap().run(|g| {
                 let board = T::reshape(
                     T::convert_to_tensor(bb::Board::new_classic().nn_image(), g),
-                    &[-1, 20, 8, 10],
+                    &[-1, N_INPUT_PLANES as isize, 8, 10],
                 );
                 let (_, value) = model.eval(false, g, board);
                 println!("\nv={}", value.eval(g).unwrap());
