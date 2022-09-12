@@ -39,5 +39,6 @@ pub fn main() {
                 stats.p1_rel_elo
             );
         },
+        true,
     );
 }

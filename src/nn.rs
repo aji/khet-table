@@ -4,8 +4,8 @@ pub use constants::*;
 pub use model::KhetModel;
 
 pub mod constants {
-    pub const N_FILTERS: usize = 16;
-    pub const N_BLOCKS: usize = 2;
+    pub const N_FILTERS: usize = 24;
+    pub const N_BLOCKS: usize = 6;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
@@ -13,9 +13,9 @@ pub mod constants {
     pub const N_COLS: usize = 10;
     pub const N_INPUT_PLANES: usize = 20;
 
-    pub const TRAIN_ITERS: usize = 200;
-    pub const BATCH_SIZE: usize = 50;
-    pub const WEIGHT_DECAY: f32 = 0.02;
+    pub const TRAIN_ITERS: usize = 500;
+    pub const BATCH_SIZE: usize = 500;
+    pub const WEIGHT_DECAY: f32 = 0.05;
     pub const LR: f32 = 0.1;
 }
 
@@ -63,12 +63,24 @@ pub mod model {
     use super::constants::*;
     use super::Float;
 
-    fn relu_norm_conv_2d<'g, X, W>(x: X, w: W, pad: usize, stride: usize) -> ag::Tensor<'g, Float>
+    fn relu_norm_conv_2d<'g, X, W>(
+        training: bool,
+        x: X,
+        w: W,
+        pad: usize,
+        stride: usize,
+    ) -> ag::Tensor<'g, Float>
     where
         X: AsRef<ag::Tensor<'g, Float>> + Copy,
         W: AsRef<ag::Tensor<'g, Float>> + Copy,
     {
-        T::relu(T::normalize(T::conv2d(x, w, pad, stride), &[0, 2, 3]))
+        let x = T::conv2d(x, w, pad, stride);
+        if training {
+            T::normalize(x, &[0, 2, 3])
+        } else {
+            x
+        };
+        T::relu(x)
     }
 
     // w: [i, j], x: [batches, j], returns [batches, i]
@@ -104,10 +116,11 @@ pub mod model {
         // out [batch, n_filters, N_ROWS, N_COLS]
         fn eval<'env, 'name, 'g>(
             &self,
+            training: bool,
             ctx: &'g ag::Context<'env, 'name, Float>,
             x: ag::Tensor<'g, Float>,
         ) -> ag::Tensor<'g, Float> {
-            relu_norm_conv_2d(x, ctx.variable_by_id(self.conv), 1, 1)
+            relu_norm_conv_2d(training, x, ctx.variable_by_id(self.conv), 1, 1)
         }
     }
 
@@ -141,6 +154,7 @@ pub mod model {
         // out [batch, n_filters, N_ROWS, N_COLS]
         fn eval<'env, 'name, 'g>(
             &self,
+            training: bool,
             ctx: &'g ag::Context<'env, 'name, Float>,
             x0: ag::Tensor<'g, Float>,
         ) -> ag::Tensor<'g, Float> {
@@ -161,8 +175,8 @@ pub mod model {
             // [3] "Identity Mappings in Deep Residual Networks", K. He, X. Zhang,
             // S. Ren, J. Sun https://arxiv.org/pdf/1603.05027.pdf
 
-            let x1 = relu_norm_conv_2d(x0, ctx.variable_by_id(self.conv1), 1, 1);
-            let x2 = relu_norm_conv_2d(x1, ctx.variable_by_id(self.conv2), 1, 1);
+            let x1 = relu_norm_conv_2d(training, x0, ctx.variable_by_id(self.conv1), 1, 1);
+            let x2 = relu_norm_conv_2d(training, x1, ctx.variable_by_id(self.conv2), 1, 1);
             x0 + x2
         }
     }
@@ -194,10 +208,11 @@ pub mod model {
         // out [batch, N_MOVES]
         fn eval<'env, 'name, 'g>(
             &self,
+            training: bool,
             ctx: &'g ag::Context<'env, 'name, Float>,
             x: &ag::Tensor<'g, Float>,
         ) -> ag::Tensor<'g, Float> {
-            let x = relu_norm_conv_2d(x, ctx.variable_by_id(self.conv), 0, 1);
+            let x = relu_norm_conv_2d(training, x, ctx.variable_by_id(self.conv), 0, 1);
             let x = T::reshape(x, &[-1, (2 * N_ROWS * N_COLS) as isize]);
             let x = linear(ctx.variable_by_id(self.fc), x);
             T::reshape(x, &[-1, N_MOVES as isize])
@@ -239,10 +254,11 @@ pub mod model {
         // out [batch]
         fn eval<'env, 'name, 'g>(
             &self,
+            training: bool,
             ctx: &'g ag::Context<'env, 'name, Float>,
             x: &ag::Tensor<'g, Float>,
         ) -> ag::Tensor<'g, Float> {
-            let x = T::relu(T::conv2d(x, ctx.variable_by_id(self.conv), 0, 1));
+            let x = relu_norm_conv_2d(training, x, ctx.variable_by_id(self.conv), 0, 1);
             let x = T::reshape(x, &[-1, (N_ROWS * N_COLS) as isize]);
             let x = T::relu(linear(ctx.variable_by_id(self.fc1), x));
             let x = T::tanh(linear(ctx.variable_by_id(self.fc2), x));
@@ -299,19 +315,20 @@ pub mod model {
         // out ([batch, N_MOVES], [batch])
         pub fn eval<'env, 'name, 'g>(
             &self,
+            training: bool,
             ctx: &'g ag::Context<'env, 'name, Float>,
             input: ag::Tensor<'g, Float>,
         ) -> (ag::Tensor<'g, Float>, ag::Tensor<'g, Float>) {
             let res = {
-                let mut res = self.input_to_res.eval(ctx, input);
+                let mut res = self.input_to_res.eval(training, ctx, input);
                 for block in self.res_blocks.iter() {
-                    res = block.eval(ctx, res);
+                    res = block.eval(training, ctx, res);
                 }
                 res
             };
 
-            let policy = self.policy_head.eval(ctx, &res);
-            let value = self.value_head.eval(ctx, &res);
+            let policy = self.policy_head.eval(training, ctx, &res);
+            let value = self.value_head.eval(training, ctx, &res);
 
             (policy, value)
         }
@@ -508,7 +525,7 @@ pub mod search {
         ) -> f32 {
             let res = env.run(|g| {
                 let img = T::convert_to_tensor(self.board.nn_image(), g);
-                let (policy, value) = model.eval(g, T::reshape(img, &[1, 20, 8, 10]));
+                let (policy, value) = model.eval(false, g, T::reshape(img, &[1, 20, 8, 10]));
                 let policy = T::softmax(T::reshape(policy, &[800]), 0);
                 let value = T::reshape(value, &[1]);
                 T::concat(&[policy, value], 0).eval(g).unwrap()
@@ -724,7 +741,7 @@ pub mod train {
                 .map(|id| g.variable_by_id(id))
                 .collect();
 
-            let (policy, value) = model.eval(g, ex_input_t);
+            let (policy, value) = model.eval(true, g, ex_input_t);
             let log_policy = T::log_softmax(T::reshape(policy, &[-1, 800]), 1);
             let value = T::reshape(value, &[-1]);
 
@@ -743,7 +760,7 @@ pub mod train {
 
             let mean_loss = (T::reduce_mean(value_loss - neg_policy_loss, &[0], false)
                 + WEIGHT_DECAY * weight_decay)
-                .show_prefixed("LOSS");
+                .show_prefixed("\nLOSS");
             let grads: Vec<_> = T::grad(&[mean_loss], &vars[..]);
             let update = opt.get_update_op(&vars[..], &grads[..], g);
 
@@ -761,7 +778,7 @@ pub mod train {
     }
 
     fn self_play_generator(
-        sink: mpsc::Sender<SelfPlayExample>,
+        sink: mpsc::SyncSender<SelfPlayExample>,
         env: Arc<Mutex<ag::VariableEnvironment<nn::Float>>>,
         model: &nn::KhetModel,
         draw_threshold: usize,
@@ -802,20 +819,28 @@ pub mod train {
                     T::convert_to_tensor(bb::Board::new_classic().nn_image(), g),
                     &[-1, 20, 8, 10],
                 );
-                let (_, value) = model.eval(g, board);
-                println!("v={}", value.eval(g).unwrap());
+                let (_, value) = model.eval(false, g, board);
+                println!("\nv={}", value.eval(g).unwrap());
             });
         }
     }
 
-    pub fn run_training() {
-        let (send, recv) = mpsc::channel::<SelfPlayExample>();
+    pub fn run_training<F>(f: F)
+    where
+        F: FnOnce(Arc<Mutex<ag::VariableEnvironment<nn::Float>>>, &nn::KhetModel) -> (),
+    {
+        let (send, recv) = mpsc::sync_channel::<SelfPlayExample>(2 * BATCH_SIZE);
 
         let (env, model) = {
             let mut env = ag::VariableEnvironment::<nn::Float>::new();
             let model = nn::KhetModel::default(&mut env);
             (Arc::new(Mutex::new(env)), Arc::new(model))
         };
+
+        let train_env = env.clone();
+        let train_model = model.clone();
+        let train =
+            thread::spawn(move || training_thread(recv, train_env, &train_model, BATCH_SIZE, LR));
 
         let threads: Vec<thread::JoinHandle<_>> = (0..num_cpus::get())
             .map(|_| {
@@ -826,7 +851,9 @@ pub mod train {
             })
             .collect();
 
-        training_thread(recv, env, &model, BATCH_SIZE, LR);
+        f(env.clone(), &model.clone());
+
         threads.into_iter().for_each(|t| t.join().unwrap());
+        train.join().unwrap();
     }
 }

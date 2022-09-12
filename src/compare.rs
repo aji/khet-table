@@ -42,6 +42,7 @@ fn compare_once<W, R>(
     red: R,
     clock_config: FischerClockConfig,
     draw_thresh: usize,
+    display: bool,
 ) -> bb::GameOutcome
 where
     W: Agent,
@@ -64,7 +65,7 @@ where
             let turn_start = Instant::now();
 
             let ctx = |stats: &agent::Report| {
-                if last_report.elapsed().as_millis() > 100 {
+                if display && last_report.elapsed().as_millis() > 100 {
                     let value: String = match stats.value {
                         Some(v) => {
                             let i = ((6. - v * 6.).round() as isize).clamp(0, 12);
@@ -138,6 +139,10 @@ where
             };
         }
 
+        if !display {
+            print!("*");
+            std::io::stdout().lock().flush().unwrap();
+        }
         game.add_move(&m);
 
         if let Some(outcome) = game.outcome() {
@@ -155,6 +160,7 @@ pub fn compare<P1, P2, S>(
     clock_config: FischerClockConfig,
     draw_thresh: usize,
     stats_sink: S,
+    display: bool,
 ) -> Stats
 where
     P1: Agent + Clone,
@@ -187,14 +193,14 @@ where
     };
 
     (0..(num_games / 2)).for_each(|_| {
-        match compare_once(p1.clone(), p2.clone(), clock_config, draw_thresh) {
+        match compare_once(p1.clone(), p2.clone(), clock_config, draw_thresh, display) {
             GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
             GameOutcome::WhiteWins => p1_win.fetch_add(1, Ordering::Relaxed),
             GameOutcome::RedWins => p1_lose.fetch_add(1, Ordering::Relaxed),
         };
         stats_sink.report(capture_stats());
 
-        match compare_once(p2.clone(), p1.clone(), clock_config, draw_thresh) {
+        match compare_once(p2.clone(), p1.clone(), clock_config, draw_thresh, display) {
             GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
             GameOutcome::WhiteWins => p1_lose.fetch_add(1, Ordering::Relaxed),
             GameOutcome::RedWins => p1_win.fetch_add(1, Ordering::Relaxed),

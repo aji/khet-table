@@ -1,14 +1,74 @@
-use std::{fmt, time::Instant};
+use std::{
+    fmt,
+    fs::OpenOptions,
+    io::Write,
+    time::{Duration, Instant},
+};
 
 use autograd as ag;
 
 use khet::{
     agent,
+    clock::FischerClockConfig,
+    compare::{compare, Stats},
     nn::{self, search::Params},
 };
 
 fn main() {
-    nn::train::run_training();
+    let train_start = Instant::now();
+
+    nn::train::run_training(|env, model| loop {
+        let params = env.lock().unwrap().clone();
+        let p1 = NNAgent::new(&params, model, agent::StandardMctsTimeManagement::new(25));
+        let p2 = agent::StandardMctsAgent::new(agent::StandardMctsTimeManagement::new(25));
+
+        let out = compare(
+            p1,
+            p2,
+            20,
+            FischerClockConfig::new(
+                Duration::from_secs_f64(20.0),
+                Duration::from_secs_f64(1.0),
+                Duration::from_secs_f64(20.0),
+            ),
+            100,
+            |stats: Stats| {
+                let total_played = stats.p1_win + stats.p1_draw + stats.p1_lose;
+                println!(
+                    "\n({}/{}) ({}/{}/{}) elo={:+6.0}",
+                    total_played,
+                    stats.num_games,
+                    stats.p1_win,
+                    stats.p1_draw,
+                    stats.p1_lose,
+                    stats.p1_rel_elo
+                );
+            },
+            false,
+        );
+
+        let op = match OpenOptions::new()
+            .write(true)
+            .append(true)
+            .create(true)
+            .open("compare.txt")
+        {
+            Ok(mut f) => write!(
+                f,
+                "{},{},{},{},{}",
+                train_start.elapsed().as_secs_f64(),
+                out.p1_win,
+                out.p1_draw,
+                out.p1_lose,
+                out.p1_rel_elo
+            ),
+            Err(e) => {
+                println!("\nWARN: could not open compare.txt: {}", e);
+                Ok(())
+            }
+        };
+        op.unwrap();
+    });
 }
 
 #[derive(Clone)]
