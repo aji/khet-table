@@ -4,8 +4,8 @@ pub use constants::*;
 pub use model::KhetModel;
 
 pub mod constants {
-    pub const N_FILTERS: usize = 24;
-    pub const N_BLOCKS: usize = 4;
+    pub const N_FILTERS: usize = 16;
+    pub const N_BLOCKS: usize = 2;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
@@ -14,8 +14,9 @@ pub mod constants {
     pub const N_INPUT_PLANES: usize = 20;
 
     pub const TRAIN_ITERS: usize = 200;
-    pub const BATCH_SIZE: usize = 200;
-    pub const LR: f32 = 0.0001;
+    pub const BATCH_SIZE: usize = 50;
+    pub const WEIGHT_DECAY: f32 = 0.002;
+    pub const LR: f32 = 0.1;
 }
 
 /*
@@ -91,7 +92,11 @@ pub mod model {
         ) -> InputToRes {
             let shape = &[n_filters, N_INPUT_PLANES, 3, 3];
             InputToRes {
-                conv: ns.slot().name("conv").set(rng.standard_normal(shape)),
+                conv: ns.slot().name("conv").set(rng.random_normal(
+                    shape,
+                    0.0,
+                    1.0 / n_filters as f64,
+                )),
             }
         }
 
@@ -119,8 +124,16 @@ pub mod model {
         ) -> ResBlock {
             let shape = &[n_filters, n_filters, 3, 3];
             ResBlock {
-                conv1: ns.slot().name("conv1").set(rng.standard_normal(shape)),
-                conv2: ns.slot().name("conv2").set(rng.standard_normal(shape)),
+                conv1: ns.slot().name("conv1").set(rng.random_normal(
+                    shape,
+                    0.0,
+                    1.0 / n_filters as f64,
+                )),
+                conv2: ns.slot().name("conv2").set(rng.random_normal(
+                    shape,
+                    0.0,
+                    1.0 / n_filters as f64,
+                )),
             }
         }
 
@@ -212,7 +225,7 @@ pub mod model {
                 fc1: ns
                     .slot()
                     .name("fc1")
-                    .set(rng.glorot_uniform(&[n_hidden, N_ROWS * N_COLS])),
+                    .set(ag::ndarray_ext::zeros(&[n_hidden, N_ROWS * N_COLS])),
                 fc2: ns.slot().name("fc2").set(rng.random_uniform(
                     &[1, n_hidden],
                     -0.2 / n_hidden as f64,
@@ -703,6 +716,13 @@ pub mod train {
             let ex_policy_t = g.placeholder("policy", &[-1, 800]);
             let ex_value_t = g.placeholder("value", &[-1]);
 
+            let vars: Vec<_> = model
+                .namespaces(&env)
+                .map(|ns| ns.current_var_ids().into_iter())
+                .flatten()
+                .map(|id| g.variable_by_id(id))
+                .collect();
+
             let (policy, value) = model.eval(g, ex_input_t);
             let log_policy = T::log_softmax(T::reshape(policy, &[-1, 800]), 1);
             let value = T::reshape(value, &[-1]);
@@ -714,15 +734,15 @@ pub mod train {
             );
             let neg_policy_loss = T::reshape(neg_policy_loss_dots, &[-1]);
             let value_loss = T::pow(value - ex_value_t, 2.0);
-            let mean_loss =
-                T::reduce_mean(value_loss - neg_policy_loss, &[0], false).show_prefixed("LOSS");
+            let weight_decay = vars
+                .iter()
+                .map(|v| T::sum_all(T::pow(T::reshape(v, &[-1]), 2.0)))
+                .reduce(|a, b| a + b)
+                .expect("no variables?");
 
-            let vars: Vec<_> = model
-                .namespaces(&env)
-                .map(|ns| ns.current_var_ids().into_iter())
-                .flatten()
-                .map(|id| g.variable_by_id(id))
-                .collect();
+            let mean_loss = (T::reduce_mean(value_loss - neg_policy_loss, &[0], false)
+                + WEIGHT_DECAY * weight_decay)
+                .show_prefixed("LOSS");
             let grads: Vec<_> = T::grad(&[mean_loss], &vars[..]);
             let update = opt.get_update_op(&vars[..], &grads[..], g);
 
