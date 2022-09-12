@@ -12,6 +12,10 @@ pub mod constants {
     pub const N_ROWS: usize = 8;
     pub const N_COLS: usize = 10;
     pub const N_INPUT_PLANES: usize = 20;
+
+    pub const TRAIN_ITERS: usize = 200;
+    pub const BATCH_SIZE: usize = 200;
+    pub const LR: f32 = 0.0001;
 }
 
 /*
@@ -211,8 +215,8 @@ pub mod model {
                     .set(rng.glorot_uniform(&[n_hidden, N_ROWS * N_COLS])),
                 fc2: ns.slot().name("fc2").set(rng.random_uniform(
                     &[1, n_hidden],
-                    -1.0 / n_hidden as f64,
-                    1.0 / n_hidden as f64,
+                    -0.2 / n_hidden as f64,
+                    0.2 / n_hidden as f64,
                 )),
             }
         }
@@ -595,7 +599,7 @@ pub mod train {
     use ag::{prelude::Optimizer, tensor_ops as T, variable::NamespaceTrait};
     use autograd as ag;
 
-    use nn::Float;
+    use nn::*;
 
     #[derive(Clone, Debug)]
     struct SelfPlay {
@@ -627,7 +631,7 @@ pub mod train {
         while game.outcome().is_none() && game.len_plys() < draw_threshold {
             let res = nn::search::run(
                 |stats: nn::search::Stats| {
-                    if stats.iterations >= 400 {
+                    if stats.iterations >= TRAIN_ITERS {
                         nn::search::Signal::Abort
                     } else {
                         nn::search::Signal::Continue
@@ -744,8 +748,6 @@ pub mod train {
         loop {
             let env = env.lock().unwrap().clone();
             let res = run_self_play(&env, model, draw_threshold);
-            print!("X");
-            std::io::stdout().lock().flush().unwrap();
             let value = res.value;
             for pos in res.positions.into_iter() {
                 let example = SelfPlayExample {
@@ -774,6 +776,14 @@ pub mod train {
                 batch
             };
             update_weights(&mut env.lock().unwrap(), model, &batch[..], lr);
+            env.lock().unwrap().run(|g| {
+                let board = T::reshape(
+                    T::convert_to_tensor(bb::Board::new_classic().nn_image(), g),
+                    &[-1, 20, 8, 10],
+                );
+                let (_, value) = model.eval(g, board);
+                println!("v={}", value.eval(g).unwrap());
+            });
         }
     }
 
@@ -795,7 +805,7 @@ pub mod train {
             })
             .collect();
 
-        training_thread(recv, env, &model, 1000, 0.2);
+        training_thread(recv, env, &model, BATCH_SIZE, LR);
         threads.into_iter().for_each(|t| t.join().unwrap());
     }
 }
