@@ -4,8 +4,8 @@ pub use constants::*;
 pub use model::KhetModel;
 
 pub mod constants {
-    pub const N_FILTERS: usize = 24;
-    pub const N_BLOCKS: usize = 6;
+    pub const N_FILTERS: usize = 16;
+    pub const N_BLOCKS: usize = 2;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
@@ -13,10 +13,10 @@ pub mod constants {
     pub const N_COLS: usize = 10;
     pub const N_INPUT_PLANES: usize = 20;
 
-    pub const TRAIN_ITERS: usize = 800;
-    pub const BATCH_SIZE: usize = 200;
-    pub const WEIGHT_DECAY: f32 = 0.001;
-    pub const LR: f32 = 0.002;
+    pub const TRAIN_ITERS: usize = 200;
+    pub const BATCH_SIZE: usize = 50;
+    pub const WEIGHT_DECAY: f32 = 0.02;
+    pub const LR: f32 = 0.1;
 }
 
 /*

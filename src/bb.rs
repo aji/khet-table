@@ -485,11 +485,14 @@ impl Board {
             }
         };
 
+        let b = self;
+        /*
         let b = if self.white_to_move() {
             self.clone()
         } else {
             self.flip_and_rotate()
         };
+        */
 
         let w_laser = b.calc_laser(true);
         let r_laser = b.calc_laser(false);
