@@ -1,65 +1,14 @@
-use std::{
-    fmt,
-    time::{Duration, Instant},
-};
+use std::{fmt, time::Instant};
 
 use autograd as ag;
 
 use khet::{
     agent,
-    clock::FischerClockConfig,
-    compare::compare,
     nn::{self, search::Params},
 };
 
 fn main() {
-    let mut epoch = 0;
-    let mut env = ag::VariableEnvironment::<nn::Float>::new();
-    let model = nn::KhetModel::default(&mut env);
-
-    loop {
-        let lr = 0.2 * 10.0f32.powf(-(epoch / 10) as f32);
-        for _ in 0..20 {
-            let start = Instant::now();
-            let out = nn::train::run_self_play_batch(&env, &model, 10, 100);
-            println!("{:?} lr={}", start.elapsed(), lr);
-            nn::train::update_weights(&env, &model, &out[..], lr);
-        }
-
-        let p1 = NNAgent::new(&env, &model, agent::StandardMctsTimeManagement::new(25));
-        let p2 = agent::StandardMctsAgent::new(agent::StandardMctsTimeManagement::new(25));
-
-        let p1_desc = format!("{}", p1);
-        let p2_desc = format!("{}", p2);
-
-        compare(
-            p1,
-            p2,
-            10,
-            FischerClockConfig::new(
-                Duration::from_secs_f64(10.0),
-                Duration::from_secs_f64(0.2),
-                Duration::from_secs_f64(10.0),
-            ),
-            100,
-            |stats: khet::compare::Stats| {
-                let total_played = stats.p1_win + stats.p1_draw + stats.p1_lose;
-                println!(
-                    "\x1b[G\x1b[K({:3}/{:3}) P1={} P2={} ({:3}/{:3}/{:3}) P1 rel. elo {:+6.0}",
-                    total_played,
-                    stats.num_games,
-                    p1_desc,
-                    p2_desc,
-                    stats.p1_win,
-                    stats.p1_draw,
-                    stats.p1_lose,
-                    stats.p1_rel_elo
-                );
-            },
-        );
-
-        epoch += 1;
-    }
+    nn::train::run_training();
 }
 
 #[derive(Clone)]
@@ -70,6 +19,7 @@ struct NNAgent<'env, 'name, 'model, T: Clone> {
 }
 
 impl<'env, 'name, 'model, T: Clone> NNAgent<'env, 'name, 'model, T> {
+    #[allow(unused)]
     fn new(
         env: &'env ag::VariableEnvironment<'name, nn::Float>,
         model: &'model nn::KhetModel,

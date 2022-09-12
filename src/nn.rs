@@ -5,7 +5,7 @@ pub use model::KhetModel;
 
 pub mod constants {
     pub const N_FILTERS: usize = 16;
-    pub const N_BLOCKS: usize = 8;
+    pub const N_BLOCKS: usize = 2;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
@@ -587,31 +587,33 @@ pub mod search {
 pub mod train {
     use std::{
         io::Write,
-        sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc, Mutex,
-        },
+        sync::{mpsc, Arc, Mutex},
+        thread,
     };
 
     use crate::{bb, nn};
     use ag::{prelude::Optimizer, tensor_ops as T, variable::NamespaceTrait};
     use autograd as ag;
-    use rayon::prelude::*;
 
     use nn::Float;
 
     #[derive(Clone, Debug)]
-    #[allow(unused)]
-    pub struct SelfPlay {
-        result: f32,
+    struct SelfPlay {
+        value: f32,
         positions: Vec<SelfPlayPosition>,
     }
 
     #[derive(Clone, Debug)]
-    #[allow(unused)]
-    pub struct SelfPlayPosition {
+    struct SelfPlayPosition {
         board: bb::Board,
         implied_policy: Vec<f32>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct SelfPlayExample {
+        board: bb::Board,
+        implied_policy: Vec<f32>,
+        value: f32,
     }
 
     fn run_self_play(
@@ -646,51 +648,29 @@ pub mod train {
         }
 
         let result = game.outcome().unwrap_or(bb::GameOutcome::Draw).value() as f32;
-        SelfPlay { result, positions }
+        SelfPlay {
+            value: result,
+            positions,
+        }
     }
 
-    pub fn run_self_play_batch(
+    fn update_weights(
         env: &ag::VariableEnvironment<nn::Float>,
         model: &nn::KhetModel,
-        num_games: usize,
-        draw_threshold: usize,
-    ) -> Vec<SelfPlay> {
-        let res = Arc::new(Mutex::new(Vec::new()));
-        let env = Arc::new(Mutex::new(env.clone()));
-        let done: AtomicUsize = AtomicUsize::new(0);
-
-        (0..num_games).into_par_iter().for_each(|_| {
-            let my_env = env.lock().unwrap().clone();
-            let my_res = run_self_play(&my_env, model, draw_threshold);
-            print!("{}", done.fetch_add(1, Ordering::Relaxed) + 1);
-            std::io::stdout().lock().flush().unwrap();
-            res.lock().unwrap().push(my_res);
-        });
-        println!("\nall done");
-
-        Arc::try_unwrap(res).unwrap().into_inner().unwrap()
-    }
-
-    pub fn update_weights(
-        env: &ag::VariableEnvironment<nn::Float>,
-        model: &nn::KhetModel,
-        games: &[SelfPlay],
+        examples: &[SelfPlayExample],
         lr: f32,
     ) {
         use ag::ndarray as nd;
 
         let opt = ag::optimizers::SGD::new(lr);
 
-        let positions: Vec<(nd::Array3<Float>, nd::Array1<Float>, Float)> = games
+        let positions: Vec<(nd::Array3<Float>, nd::Array1<Float>, Float)> = examples
             .iter()
-            .map(|g| {
-                g.positions.iter().map(|p| {
-                    let image = p.board.nn_image();
-                    let policy: nd::Array1<Float> = nd::ArrayBase::from(p.implied_policy.clone());
-                    (image, policy, g.result)
-                })
+            .map(|ex| {
+                let image = ex.board.nn_image();
+                let policy: nd::Array1<Float> = nd::ArrayBase::from(ex.implied_policy.clone());
+                (image, policy, ex.value)
             })
-            .flatten()
             .collect();
 
         let ex_input = {
@@ -722,7 +702,8 @@ pub mod train {
             );
             let neg_policy_loss = T::reshape(neg_policy_loss_dots, &[-1]);
             let value_loss = T::pow(value - ex_value_t, 2.0);
-            let mean_loss = T::reduce_mean(value_loss - neg_policy_loss, &[0], false).show();
+            let mean_loss =
+                T::reduce_mean(value_loss - neg_policy_loss, &[0], false).show_prefixed("LOSS");
 
             let vars: Vec<_> = model
                 .namespaces(&env)
@@ -744,5 +725,69 @@ pub mod train {
                     r.unwrap();
                 });
         });
+    }
+
+    fn self_play_generator(
+        sink: mpsc::Sender<SelfPlayExample>,
+        env: Arc<Mutex<ag::VariableEnvironment<nn::Float>>>,
+        model: &nn::KhetModel,
+        draw_threshold: usize,
+    ) -> () {
+        loop {
+            let env = env.lock().unwrap().clone();
+            let res = run_self_play(&env, model, draw_threshold);
+            print!("X");
+            std::io::stdout().lock().flush().unwrap();
+            let value = res.value;
+            for pos in res.positions.into_iter() {
+                let example = SelfPlayExample {
+                    board: pos.board,
+                    implied_policy: pos.implied_policy,
+                    value,
+                };
+                sink.send(example).unwrap();
+            }
+        }
+    }
+
+    fn training_thread(
+        source: mpsc::Receiver<SelfPlayExample>,
+        env: Arc<Mutex<ag::VariableEnvironment<nn::Float>>>,
+        model: &nn::KhetModel,
+        batch_size: usize,
+        lr: f32,
+    ) -> () {
+        loop {
+            let batch = {
+                let mut batch = Vec::new();
+                for _ in 0..batch_size {
+                    batch.push(source.recv().unwrap());
+                }
+                batch
+            };
+            update_weights(&mut env.lock().unwrap(), model, &batch[..], lr);
+        }
+    }
+
+    pub fn run_training() {
+        let (send, recv) = mpsc::channel::<SelfPlayExample>();
+
+        let (env, model) = {
+            let mut env = ag::VariableEnvironment::<nn::Float>::new();
+            let model = nn::KhetModel::default(&mut env);
+            (Arc::new(Mutex::new(env)), Arc::new(model))
+        };
+
+        let threads: Vec<thread::JoinHandle<_>> = (0..num_cpus::get())
+            .map(|_| {
+                let sink = send.clone();
+                let env = env.clone();
+                let model = model.clone();
+                thread::spawn(move || self_play_generator(sink, env, &model, 100))
+            })
+            .collect();
+
+        training_thread(recv, env, &model, 1000, 0.2);
+        threads.into_iter().for_each(|t| t.join().unwrap());
     }
 }

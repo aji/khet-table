@@ -178,6 +178,7 @@ dependencies = [
  "bumpalo",
  "env_logger",
  "log",
+ "num_cpus",
  "rand",
  "rayon",
  "typed-arena",
