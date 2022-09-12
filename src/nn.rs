@@ -218,14 +218,15 @@ pub mod model {
             n_hidden: usize,
         ) -> ValueHead {
             ValueHead {
-                conv: ns
-                    .slot()
-                    .name("conv")
-                    .set(rng.standard_normal(&[1, n_filters, 1, 1])),
+                conv: ns.slot().name("conv").set(rng.random_normal(
+                    &[1, n_filters, 1, 1],
+                    0.0,
+                    1.0 / n_filters as f64,
+                )),
                 fc1: ns
                     .slot()
                     .name("fc1")
-                    .set(ag::ndarray_ext::zeros(&[n_hidden, N_ROWS * N_COLS])),
+                    .set(rng.glorot_uniform(&[n_hidden, N_ROWS * N_COLS])),
                 fc2: ns.slot().name("fc2").set(rng.random_uniform(
                     &[1, n_hidden],
                     -0.2 / n_hidden as f64,
