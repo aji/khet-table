@@ -285,16 +285,14 @@ fn gen_children_in<'alo, R: Rollout>(
     bump: &'alo Bump,
 ) -> Vec<'alo, Node<'alo>> {
     let mut children = Vec::with_capacity_in(moves.len(), bump);
-    let mut rollouts: std::vec::Vec<(bb::Board, Score)> = std::vec::Vec::with_capacity(moves.len());
-
-    moves
+    let rollouts: std::vec::Vec<(bb::Board, Score)> = moves
         .par_iter()
         .map(|m| {
             let next = game.peek_move(m);
             let initial_score = calc_initial_score(game, &next, rollout);
             (next, initial_score)
         })
-        .collect_into_vec(&mut rollouts);
+        .collect();
 
     for (next, initial_score) in rollouts.into_iter() {
         children.push(Node::leaf(next, initial_score));

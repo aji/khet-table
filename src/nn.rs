@@ -5,7 +5,7 @@ pub use model::KhetModel;
 
 pub mod constants {
     pub const N_FILTERS: usize = 16;
-    pub const N_BLOCKS: usize = 2;
+    pub const N_BLOCKS: usize = 3;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
@@ -15,8 +15,9 @@ pub mod constants {
 
     pub const LEAK: f32 = 0.05;
 
+    pub const DRAW_THRESH: usize = 1000;
     pub const TRAIN_ITERS: usize = 50;
-    pub const BATCH_SIZE: usize = 2000;
+    pub const BATCH_SIZE: usize = 100;
     pub const WEIGHT_DECAY: f32 = 0.001;
     pub const LR: f32 = 0.002;
 }
@@ -803,12 +804,18 @@ pub mod train {
             let res = run_self_play(&env, model, draw_threshold);
             let value = res.value;
             for pos in res.positions.into_iter() {
-                let example = SelfPlayExample {
+                let example2 = SelfPlayExample {
+                    board: pos.board.flip_and_rotate(),
+                    implied_policy: bb::MoveSet::nn_rotate(&pos.implied_policy),
+                    value: -value,
+                };
+                let example1 = SelfPlayExample {
                     board: pos.board,
                     implied_policy: pos.implied_policy,
                     value,
                 };
-                sink.send(example).unwrap();
+                sink.send(example1).unwrap();
+                sink.send(example2).unwrap();
             }
         }
     }
@@ -820,13 +827,15 @@ pub mod train {
         batch_size: usize,
         lr: f32,
     ) -> () {
+        let mut iters = 0;
         let opt = {
             let mut env = env.lock().unwrap();
             let vars = model.variables(&env);
-            ag::optimizers::adagrad::AdaGrad::new(lr, vars, &mut env, "adagrad")
+            ag::optimizers::adam::Adam::new(0.001, 1e-08, 0.9, 0.999, vars, &mut env, "adam")
         };
 
         loop {
+            iters += 1;
             let batch = {
                 let mut batch = Vec::new();
                 for _ in 0..batch_size {
@@ -841,7 +850,12 @@ pub mod train {
                     &[-1, N_INPUT_PLANES as isize, 8, 10],
                 );
                 let (_, value) = model.eval(false, g, board);
-                println!("\nv={}", value.eval(g).unwrap());
+                println!(
+                    "\n({},{}) v={}",
+                    iters,
+                    iters * BATCH_SIZE,
+                    value.eval(g).unwrap()
+                );
             });
         }
     }
@@ -868,7 +882,7 @@ pub mod train {
                 let sink = send.clone();
                 let env = env.clone();
                 let model = model.clone();
-                thread::spawn(move || self_play_generator(sink, env, &model, 100))
+                thread::spawn(move || self_play_generator(sink, env, &model, DRAW_THRESH))
             })
             .collect();
 

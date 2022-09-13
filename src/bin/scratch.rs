@@ -18,6 +18,8 @@ fn main() {
     let train_start = Instant::now();
 
     nn::train::run_training(|env, model| loop {
+        let start_time = train_start.elapsed();
+
         let params = env.lock().unwrap().clone();
         let p1 = NNAgent::new(&params, model, agent::StandardMctsTimeManagement::new(25));
         let p2 = agent::StandardMctsAgent::new(agent::StandardMctsTimeManagement::new(25));
@@ -56,7 +58,7 @@ fn main() {
             Ok(mut f) => write!(
                 f,
                 "{},{},{},{},{}\n",
-                train_start.elapsed().as_secs_f64(),
+                start_time.as_secs_f64(),
                 out.p1_win,
                 out.p1_draw,
                 out.p1_lose,

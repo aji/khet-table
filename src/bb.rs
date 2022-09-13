@@ -790,12 +790,12 @@ impl MoveSet {
 
     pub fn nn_valid(&self) -> Vec<usize> {
         let mut res = Vec::new();
-        for i in 0..=9 {
+        for j in 0..=9 {
             let mut m = 0x_0200_0000_0000_0000_0000_0000_0000_0000;
             for r in 0..8 {
                 for c in 0..10 {
-                    if self.0[i] & m != 0 {
-                        res.push(i * 80 + r * 10 + c);
+                    if self.0[j] & m != 0 {
+                        res.push(j * 80 + r * 10 + c);
                     }
                     m >>= 1;
                 }
@@ -803,6 +803,32 @@ impl MoveSet {
             }
         }
         res
+    }
+
+    pub fn nn_rotate<T: Copy>(moves: &Vec<T>) -> Vec<T> {
+        (0..800)
+            .map(|i| {
+                let c = i % 10;
+                let r = (i / 10) % 8;
+                let j = (i / 10) / 8;
+                let nc = 9 - c;
+                let nr = 7 - r;
+                let nj = match j {
+                    0 => 2, // n -> s
+                    1 => 3, // e -> w
+                    2 => 0, // s -> n
+                    3 => 1, // w -> e
+                    4 => 6, // ne -> sw
+                    5 => 7, // se -> nw
+                    6 => 4, // sw -> ne
+                    7 => 5, // nw -> se
+                    8 => 8, // cw -> cw
+                    9 => 9, // ccw -> ccw
+                    _ => unreachable!(),
+                };
+                moves[nj * 80 + nr * 10 + nc]
+            })
+            .collect()
     }
 }
 
