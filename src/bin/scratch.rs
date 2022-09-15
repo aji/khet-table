@@ -17,11 +17,12 @@ use khet::{
 fn main() {
     let train_start = Instant::now();
 
-    nn::train::run_training(|env, model| loop {
+    nn::train::run_training(move |env, model| {
         let start_time = train_start.elapsed();
 
-        let params = env.lock().unwrap().clone();
-        let p1 = NNAgent::new(&params, model, agent::StandardMctsTimeManagement::new(25));
+        env.save("weights.json").unwrap();
+
+        let p1 = NNAgent::new(env, model, agent::StandardMctsTimeManagement::new(25));
         let p2 = agent::StandardMctsAgent::new(agent::StandardMctsTimeManagement::new(25));
 
         let out = compare(

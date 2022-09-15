@@ -1,4 +1,3 @@
 /target
-weights.txt
-losses.txt
-plot.html
+compare.txt
+weights.json
