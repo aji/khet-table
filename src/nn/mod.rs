@@ -18,7 +18,7 @@ pub mod constants {
 
     pub const SAMPLING_MOVES: usize = 30;
     pub const DRAW_THRESH: usize = 512;
-    pub const TRAIN_ITERS: usize = 800;
+    pub const TRAIN_ITERS: usize = 500;
     pub const ROOT_DIRICHLET_ALPHA: f32 = 0.3;
     pub const ROOT_EXPLORATION_FRACTION: f32 = 0.25;
 
@@ -27,12 +27,12 @@ pub mod constants {
 
     pub const TRAIN_STEPS: usize = 700_000;
     pub const BUFFER_SIZE: usize = 20_000_000;
-    pub const BATCH_SIZE: usize = 4096;
+    pub const BATCH_SIZE: usize = 1024;
 
     pub const WEIGHT_DECAY: f32 = 1e-4;
     pub const MOMENTUM: f32 = 0.9;
     pub const LR_SCHEDULE: [(usize, f32); 4] =
-        [(0, 2e-2), (100_000, 2e-2), (300_000, 2e-3), (500_000, 2e-4)];
+        [(0, 2e-1), (100_000, 2e-2), (300_000, 2e-3), (500_000, 2e-4)];
 }
 
 pub use constants::*;

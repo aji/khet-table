@@ -254,6 +254,7 @@ impl TrainEnv {
                 .into_iter()
                 .map(|id| g.variable_by_id(id))
                 .collect();
+            println!("{}", vars.len());
 
             let (policy, value) = self.model.eval(true, g, ex_input_t);
             let log_policy = T::log_softmax(T::reshape(policy, &[-1, 800]), 1);
@@ -272,11 +273,20 @@ impl TrainEnv {
                 .reduce(|a, b| a + b)
                 .expect("no variables?");
 
-            let mean_loss = (T::reduce_mean(value_loss - neg_policy_loss, &[0], false)
+            let total_loss = (T::reduce_sum(value_loss - neg_policy_loss, &[0], false)
                 + WEIGHT_DECAY * weight_decay)
                 .show_prefixed("\nLOSS");
-            let grads: Vec<_> = T::grad(&[mean_loss], &vars[..]);
-            let update = opt.get_update_op(&vars[..], &grads[..], g);
+
+            let grads: Vec<_> = T::grad(&[total_loss], &vars[..]);
+            let grad_norms: Vec<_> = grads
+                .iter()
+                .map(|g| T::reshape(T::pow(g, 2.0), &[-1]))
+                .collect();
+            let grad_norm = T::sqrt(T::sum_all(T::concat(&grad_norms[..], 0)));
+            let grad_scale = T::clip(grad_norm, 0.0, 1.0) / grad_norm;
+            let grads_clipped: Vec<_> = grads.iter().map(|g| g * grad_scale).collect();
+
+            let update = opt.get_update_op(&vars[..], &grads_clipped[..], g);
 
             g.evaluator()
                 .push(update)
