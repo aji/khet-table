@@ -148,6 +148,16 @@ struct Example {
     value: f32,
 }
 
+impl Example {
+    fn clone_flipped(&self) -> Example {
+        Example {
+            board: self.board.flip_and_rotate(),
+            policy: bb::MoveSet::nn_rotate(&self.policy),
+            value: -self.value,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct TrainEnv {
     vars: ag::VariableEnvironment<'static, Float>,
@@ -418,6 +428,11 @@ fn start_training_thread(ctx: Arc<TrainContext>) -> thread::JoinHandle<()> {
 
 fn start_self_play_thread(_index: usize, ctx: Arc<TrainContext>) -> thread::JoinHandle<()> {
     thread::spawn(move || loop {
-        ctx.add_examples(ctx.clone_latest_env().gen_self_play());
+        let mut examples = Vec::new();
+        for ex in ctx.clone_latest_env().gen_self_play() {
+            examples.push(ex.clone_flipped());
+            examples.push(ex);
+        }
+        ctx.add_examples(examples.into_iter());
     })
 }

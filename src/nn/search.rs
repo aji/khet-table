@@ -2,7 +2,7 @@ use crate::{bb, nn};
 use ag::tensor_ops as T;
 use autograd as ag;
 
-use super::N_INPUT_PLANES;
+use super::constants::*;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Params {
@@ -15,16 +15,16 @@ impl Params {
     pub fn default_train() -> Params {
         Params {
             training: true,
-            c_base: 100.0,
-            c_init: 1.4,
+            c_base: PUCB_C_BASE,
+            c_init: PUCB_C_INIT,
         }
     }
 
     pub fn default_eval() -> Params {
         Params {
             training: false,
-            c_base: 100.0,
-            c_init: 1.4,
+            c_base: PUCB_C_BASE,
+            c_init: PUCB_C_INIT,
         }
     }
 }
