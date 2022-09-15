@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use bumpalo::{collections::Vec, Bump};
-use rayon::prelude::*;
 
 use crate::bb;
 

@@ -5,8 +5,8 @@ pub mod search;
 pub mod train;
 
 pub mod constants {
-    pub const N_FILTERS: usize = 16;
-    pub const N_BLOCKS: usize = 2;
+    pub const N_FILTERS: usize = 36;
+    pub const N_BLOCKS: usize = 6;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
@@ -18,7 +18,7 @@ pub mod constants {
 
     pub const SAMPLING_MOVES: usize = 30;
     pub const DRAW_THRESH: usize = 512;
-    pub const TRAIN_ITERS: usize = 100;
+    pub const TRAIN_ITERS: usize = 800;
     pub const ROOT_DIRICHLET_ALPHA: f32 = 0.3;
     pub const ROOT_EXPLORATION_FRACTION: f32 = 0.25;
 
