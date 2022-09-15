@@ -116,16 +116,16 @@ impl KhetModel {
             },
 
             value_head: ValueHead {
-                conv: ns.slot().name("policy_conv").set(rng.random_normal(
+                conv: ns.slot().name("value_conv").set(rng.random_normal(
                     &[1, N_FILTERS, 1, 1],
                     0.0,
                     1.0 / N_FILTERS as f64,
                 )),
                 fc1: ns
                     .slot()
-                    .name("fc1")
+                    .name("value_fc1")
                     .set(rng.glorot_uniform(&[N_VALUE_HIDDEN, N_ROWS * N_COLS])),
-                fc2: ns.slot().name("fc2").set(rng.random_uniform(
+                fc2: ns.slot().name("value_fc2").set(rng.random_uniform(
                     &[1, N_VALUE_HIDDEN],
                     -0.2 / N_VALUE_HIDDEN as f64,
                     0.2 / N_VALUE_HIDDEN as f64,
