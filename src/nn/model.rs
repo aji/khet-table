@@ -1,4 +1,5 @@
 use ag::ndarray as nd;
+use ag::ndarray::Ix1;
 use ag::ndarray_ext::ArrayRng;
 use autograd as ag;
 
@@ -95,9 +96,8 @@ impl<R: Rng> ArrayInit<R> {
     fn fc_weights(&self, out_features: usize, in_features: usize) -> nd::Array<Float, nd::IxDyn> {
         self.rng.glorot_uniform(&[out_features, in_features])
     }
-    fn fc_biases(&self, n_features: usize) -> nd::Array<Float, nd::IxDyn> {
-        self.rng
-            .random_normal(&[n_features], 0.0, 0.01 / n_features as f64)
+    fn fc_biases(&self, n_features: usize) -> nd::Array<Float, Ix1> {
+        nd::Array::zeros([n_features])
     }
 }
 

@@ -249,7 +249,7 @@ impl TrainContext {
     fn gen_batch(&self) -> impl IntoIterator<Item = Example> {
         let mut buf = self.buf.lock().unwrap();
 
-        while buf.data.len() == 0 {
+        while buf.data.len() < BATCH_SIZE {
             buf = self.buf_cond.wait(buf).unwrap();
         }
 
