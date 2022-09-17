@@ -91,7 +91,8 @@ impl<R: Rng> ArrayInit<R> {
         self.rng.random_normal(shape, 0.0, 0.01 / shape[0] as f64)
     }
     fn conv_bias(&self, n_channels: usize) -> nd::Array<Float, nd::IxDyn> {
-        self.rng.random_normal(&[n_channels, 1, 1], 0.0, 0.01)
+        let f = 0.01 / n_channels as f64;
+        self.rng.random_normal(&[n_channels, 1, 1], 0.0, f)
     }
     fn fc_weights(&self, out_features: usize, in_features: usize) -> nd::Array<Float, nd::IxDyn> {
         self.rng.glorot_uniform(&[out_features, in_features])
