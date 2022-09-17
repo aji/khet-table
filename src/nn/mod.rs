@@ -6,7 +6,7 @@ pub mod train;
 
 pub mod constants {
     pub const N_FILTERS: usize = 36;
-    pub const N_BLOCKS: usize = 3;
+    pub const N_BLOCKS: usize = 6;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
