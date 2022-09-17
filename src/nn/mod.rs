@@ -6,19 +6,19 @@ pub mod train;
 
 pub mod constants {
     pub const N_FILTERS: usize = 36;
-    pub const N_BLOCKS: usize = 6;
+    pub const N_BLOCKS: usize = 3;
     pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
     pub const N_ROWS: usize = 8;
     pub const N_COLS: usize = 10;
-    pub const N_INPUT_PLANES: usize = 22;
+    pub const N_INPUT_PLANES: usize = 20;
 
     pub const LEAK: f32 = 0.05;
 
     pub const SAMPLING_MOVES: usize = 30;
-    pub const DRAW_THRESH: usize = 512;
-    pub const TRAIN_ITERS: usize = 500;
+    pub const DRAW_THRESH: usize = 256;
+    pub const TRAIN_ITERS: usize = 800;
     pub const ROOT_DIRICHLET_ALPHA: f32 = 0.3;
     pub const ROOT_EXPLORATION_FRACTION: f32 = 0.25;
 
@@ -26,10 +26,11 @@ pub mod constants {
     pub const PUCB_C_INIT: f32 = 1.25;
 
     pub const TRAIN_STEPS: usize = 700_000;
-    pub const BUFFER_SIZE: usize = 20_000_000;
+    pub const BUFFER_SIZE: usize = 1_000_000;
     pub const BATCH_SIZE: usize = 1024;
 
     pub const WEIGHT_DECAY: f32 = 1e-4;
+    pub const GRAD_CLIP: f32 = 1.0;
     pub const MOMENTUM: f32 = 0.9;
     pub const LR_SCHEDULE: [(usize, f32); 4] =
         [(0, 2e-1), (100_000, 2e-2), (300_000, 2e-3), (500_000, 2e-4)];

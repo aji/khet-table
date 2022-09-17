@@ -486,13 +486,6 @@ impl Board {
         };
 
         let b = self;
-        /*
-        let b = if self.white_to_move() {
-            self.clone()
-        } else {
-            self.flip_and_rotate()
-        };
-        */
 
         let w_laser = b.calc_laser(true);
         let r_laser = b.calc_laser(false);
@@ -518,9 +511,6 @@ impl Board {
         write_channel(17, b.r & b.n & !b.e);
         write_channel(18, MASK_R_OK);
         write_channel(19, r_laser.0 | r_laser.1);
-
-        write_channel(20, if self.white_to_move() { MASK_BOARD } else { 0 });
-        write_channel(21, if self.white_to_move() { 0 } else { MASK_BOARD });
 
         img
     }

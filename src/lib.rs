@@ -5,6 +5,8 @@ extern crate autograd;
 extern crate bumpalo;
 extern crate log;
 extern crate num_cpus;
+extern crate rand;
+extern crate rand_distr;
 extern crate rayon;
 extern crate test;
 extern crate typed_arena;

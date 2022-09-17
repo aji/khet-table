@@ -1,6 +1,7 @@
 use crate::{bb, nn};
 use ag::tensor_ops as T;
 use autograd as ag;
+use rand_distr::Distribution;
 
 use super::constants::*;
 
@@ -91,7 +92,12 @@ pub fn run<C: Context>(
         }
     }
 
-    let max_child = root.max_child_by_visits().expect("root has no children");
+    let max_child = if params.training && game.len_plys() < SAMPLING_MOVES {
+        root.sample_child_by_visits()
+    } else {
+        root.max_child_by_visits()
+    };
+    let max_child = max_child.expect("root has no children");
 
     Output {
         m: bb::Move::nn_ith(max_child.index),
@@ -151,17 +157,24 @@ impl Node {
         self.children.iter().max_by_key(|e| e.node.visits)
     }
 
-    fn max_child_by_puct_mut(
-        &mut self,
-        params: &Params,
-        invert: bool,
-        is_root: bool,
-    ) -> Option<&mut Edge> {
+    fn sample_child_by_visits(&self) -> Option<&Edge> {
+        let total = self.children.iter().map(|e| e.node.visits).sum::<usize>();
+        let mut i: usize = rand::random::<usize>() % total;
+        for edge in self.children.iter() {
+            if i < edge.node.visits {
+                return Some(edge);
+            }
+            i -= edge.node.visits;
+        }
+        None
+    }
+
+    fn max_child_by_puct_mut(&mut self, params: &Params, invert: bool) -> Option<&mut Edge> {
         let visit_count = self.visits;
         self.children
             .iter_mut()
             .map(|e| {
-                let puct = e.puct(params, visit_count, invert, is_root);
+                let puct = e.puct(params, visit_count, invert);
                 (e, puct)
             })
             .max_by(|a, b| a.1.total_cmp(&b.1))
@@ -172,28 +185,54 @@ impl Node {
         &mut self,
         env: &ag::VariableEnvironment<nn::Float>,
         model: &nn::KhetModel,
+        add_exploration_noise: bool,
     ) -> f32 {
-        let res = env.run(|g| {
-            let img = T::convert_to_tensor(self.board.nn_image(), g);
-            let (policy, value) = model.eval(
-                false,
-                g,
-                T::reshape(img, &[1, N_INPUT_PLANES as isize, 8, 10]),
+        let (mut policy, value) = env.run(|g| {
+            let img = T::reshape(
+                T::convert_to_tensor(
+                    if self.board.white_to_move() {
+                        self.board.nn_image()
+                    } else {
+                        self.board.flip_and_rotate().nn_image()
+                    },
+                    g,
+                ),
+                &[-1, N_INPUT_PLANES as isize, 8, 10],
             );
+
+            let (policy, value) = model.eval(false, g, img);
             let policy = T::softmax(T::reshape(policy, &[800]), 0);
             let value = T::reshape(value, &[1]);
-            T::concat(&[policy, value], 0).eval(g).unwrap()
+
+            let res = g.evaluator().push(policy).push(value).run();
+
+            let policy = res[0].as_ref().unwrap().iter().cloned().collect::<Vec<_>>();
+            let value = res[1].as_ref().unwrap()[0];
+
+            if self.board.white_to_move() {
+                (policy, value)
+            } else {
+                (bb::MoveSet::nn_rotate(&policy), -value)
+            }
         });
 
+        if add_exploration_noise {
+            let gamma = rand_distr::Gamma::new(ROOT_DIRICHLET_ALPHA, 1.0).unwrap();
+            for item in policy.iter_mut() {
+                let x = gamma.sample(&mut rand::thread_rng());
+                let f = ROOT_EXPLORATION_FRACTION;
+                *item = *item * (1. - f) + x * f;
+            }
+        }
+
         let valid = self.board.movegen().nn_valid();
-        let total: f32 = valid.iter().map(|i| res[*i]).sum();
-        let value: f32 = res[nn::N_MOVES];
+        let total: f32 = valid.iter().map(|i| policy[*i]).sum();
 
         self.children = valid
             .iter()
             .copied()
             .map(|index| {
-                let prior = res[index] / total;
+                let prior = policy[index] / total;
                 let board = {
                     let mut board = self.board.clone();
                     board.apply_move(&bb::Move::nn_ith(index));
@@ -209,7 +248,7 @@ impl Node {
             })
             .collect();
 
-        res[nn::N_MOVES]
+        value
     }
 
     fn expand(
@@ -223,10 +262,10 @@ impl Node {
         let value = if let Some(outcome) = game.outcome() {
             outcome.value() as f32
         } else if self.is_leaf() {
-            self.initialize_children(env, model)
+            self.initialize_children(env, model, params.training && is_root)
         } else {
             let e = self
-                .max_child_by_puct_mut(params, game.len_plys() % 2 == 1, is_root)
+                .max_child_by_puct_mut(params, game.len_plys() % 2 == 1)
                 .unwrap();
             game.add_board(e.node.board);
             e.node.expand(env, model, params, game, false)
@@ -256,18 +295,12 @@ impl Node {
 }
 
 impl Edge {
-    fn puct(&self, params: &Params, parent_visits: usize, invert: bool, is_root: bool) -> f32 {
-        let prior = if params.training && is_root {
-            self.prior + rand::random::<f32>() * 0.01
-        } else {
-            self.prior
-        };
-
+    fn puct(&self, params: &Params, parent_visits: usize, invert: bool) -> f32 {
         let n_tot = parent_visits as f32;
         let n = self.node.visits as f32;
         let q = if invert { -1.0 } else { 1.0 } * self.node.total_value / n;
         let c = ((1.0 + n_tot + params.c_base) / params.c_base).ln() + params.c_init;
-        let u = c * prior * n_tot.sqrt() / (1.0 + n);
+        let u = c * self.prior * n_tot.sqrt() / (1.0 + n);
         (q + 1.0) / 2.0 + u
     }
 }

@@ -10,136 +10,8 @@ use autograd::{self as ag, tensor_ops as T};
 
 use nn::*;
 
-/*
-#[derive(Clone, Debug)]
-struct SelfPlay {
-    value: f32,
-    positions: Vec<SelfPlayPosition>,
-}
-
-#[derive(Clone, Debug)]
-struct SelfPlayPosition {
-    board: bb::Board,
-    implied_policy: Vec<f32>,
-}
-
-#[derive(Clone, Debug)]
-struct SelfPlayExample {
-    board: bb::Board,
-    implied_policy: Vec<f32>,
-    value: f32,
-}
-
-fn run_self_play(
-    env: &ag::VariableEnvironment<nn::Float>,
-    model: &nn::KhetModel,
-    draw_threshold: usize,
-) -> SelfPlay {
-
-    std::io::stdout().lock().flush().unwrap();
-
-    SelfPlay {
-        value: result,
-        positions,
-    }
-}
-
-fn update_weights<O: ag::optimizers::Optimizer<nn::Float>>(
-    env: &ag::VariableEnvironment<nn::Float>,
-    model: &nn::KhetModel,
-    examples: &[SelfPlayExample],
-    opt: &O,
-) {
-}
-
-fn self_play_generator(
-    sink: mpsc::SyncSender<SelfPlayExample>,
-    env: Arc<Mutex<ag::VariableEnvironment<nn::Float>>>,
-    model: &nn::KhetModel,
-    draw_threshold: usize,
-) -> () {
-    loop {
-        let env = env.lock().unwrap().clone();
-        let res = run_self_play(&env, model, draw_threshold);
-        let value = res.value;
-        for pos in res.positions.into_iter() {
-            let example2 = SelfPlayExample {
-                board: pos.board.flip_and_rotate(),
-                implied_policy: bb::MoveSet::nn_rotate(&pos.implied_policy),
-                value: -value,
-            };
-            let example1 = SelfPlayExample {
-                board: pos.board,
-                implied_policy: pos.implied_policy,
-                value,
-            };
-            sink.send(example1).unwrap();
-            sink.send(example2).unwrap();
-        }
-    }
-}
-
-fn training_thread(
-    source: mpsc::Receiver<SelfPlayExample>,
-    env: Arc<Mutex<ag::VariableEnvironment<nn::Float>>>,
-    model: &nn::KhetModel,
-    batch_size: usize,
-    lr: f32,
-) -> () {
-    let mut iters = 0;
-    let opt = {
-        let mut env = env.lock().unwrap();
-        let vars = model.variables(&env);
-        ag::optimizers::adam::Adam::new(0.001, 1e-08, 0.9, 0.999, vars, &mut env, "adam")
-    };
-
-    loop {
-        iters += 1;
-        let batch = {
-            let mut batch = Vec::new();
-            for _ in 0..batch_size {
-                batch.push(source.recv().unwrap());
-            }
-            batch
-        };
-        update_weights(&mut env.lock().unwrap(), model, &batch[..], &opt);
-    }
-}
-
-pub fn run_training<F>(f: F)
-where
-    F: FnOnce(Arc<Mutex<ag::VariableEnvironment<nn::Float>>>, &nn::KhetModel) -> (),
-{
-    let (send, recv) = mpsc::sync_channel::<SelfPlayExample>(2 * BATCH_SIZE);
-
-    let (env, model) = {
-        let mut env = ag::VariableEnvironment::<nn::Float>::new();
-        let model = nn::KhetModel::default(&mut env);
-        (Arc::new(Mutex::new(env)), Arc::new(model))
-    };
-
-    let train_env = env.clone();
-    let train_model = model.clone();
-    let train =
-        thread::spawn(move || training_thread(recv, train_env, &train_model, BATCH_SIZE, LR));
-
-    let threads: Vec<thread::JoinHandle<_>> = (0..num_cpus::get())
-        .map(|_| {
-            let sink = send.clone();
-            let env = env.clone();
-            let model = model.clone();
-            thread::spawn(move || self_play_generator(sink, env, &model, DRAW_THRESH))
-        })
-        .collect();
-
-    f(env.clone(), &model.clone());
-
-    threads.into_iter().for_each(|t| t.join().unwrap());
-    train.join().unwrap();
-}
-*/
-
 const NS_KHET: &'static str = "khet";
+const NS_OPT: &'static str = "opt";
 
 #[derive(Clone)]
 struct Example {
@@ -149,11 +21,19 @@ struct Example {
 }
 
 impl Example {
-    fn clone_flipped(&self) -> Example {
-        Example {
-            board: self.board.flip_and_rotate(),
-            policy: bb::MoveSet::nn_rotate(&self.policy),
-            value: -self.value,
+    fn new(board: bb::Board, policy: Vec<f32>, value: f32) -> Example {
+        if board.white_to_move() {
+            Example {
+                board,
+                policy,
+                value,
+            }
+        } else {
+            Example {
+                board: board.flip_and_rotate(),
+                policy: bb::MoveSet::nn_rotate(&policy),
+                value: -value,
+            }
         }
     }
 }
@@ -161,6 +41,7 @@ impl Example {
 #[derive(Clone)]
 struct TrainEnv {
     vars: ag::VariableEnvironment<'static, Float>,
+    opt: Arc<Mutex<ag::optimizers::MomentumSGD<Float>>>,
     model: KhetModel,
     num_training_iters: usize,
 }
@@ -168,13 +49,18 @@ struct TrainEnv {
 impl TrainEnv {
     fn new() -> Self {
         let mut vars = ag::VariableEnvironment::new();
-        let model = KhetModel::new(
-            &mut vars.namespace_mut(NS_KHET),
-            &ag::ndarray_ext::ArrayRng::default(),
+        let model = KhetModel::new(&mut vars.namespace_mut(NS_KHET));
+        let opt = ag::optimizers::MomentumSGD::new(
+            0.0,
+            MOMENTUM,
+            vars.namespace(NS_KHET).current_var_ids().into_iter(),
+            &mut vars,
+            NS_OPT,
         );
         Self {
             vars,
             model,
+            opt: Arc::new(Mutex::new(opt)),
             num_training_iters: 0,
         }
     }
@@ -205,16 +91,14 @@ impl TrainEnv {
             None => print!("T"),
             Some(bb::GameOutcome::Draw) => print!("D"),
             Some(bb::GameOutcome::WhiteWins) => print!("W"),
-            Some(bb::GameOutcome::RedWins) => print!("W"),
+            Some(bb::GameOutcome::RedWins) => print!("R"),
         }
         std::io::stdout().lock().flush().unwrap();
 
         let value = game.outcome().unwrap_or(bb::GameOutcome::Draw).value() as f32;
-        return positions.into_iter().map(move |(board, policy)| Example {
-            board,
-            policy,
-            value,
-        });
+        return positions
+            .into_iter()
+            .map(move |(board, policy)| Example::new(board, policy, value));
     }
 
     fn lr(&self) -> f32 {
@@ -250,7 +134,8 @@ impl TrainEnv {
             nd::Array::from(values)
         };
 
-        let opt = ag::optimizers::SGD::new(self.lr());
+        let mut opt = self.opt.lock().unwrap();
+        opt.alpha = self.lr();
 
         self.vars.run(|g| {
             let ex_input_t = g.placeholder("input", &[-1, N_INPUT_PLANES as isize, 8, 10]);
@@ -264,7 +149,6 @@ impl TrainEnv {
                 .into_iter()
                 .map(|id| g.variable_by_id(id))
                 .collect();
-            println!("{}", vars.len());
 
             let (policy, value) = self.model.eval(true, g, ex_input_t);
             let log_policy = T::log_softmax(T::reshape(policy, &[-1, 800]), 1);
@@ -293,7 +177,7 @@ impl TrainEnv {
                 .map(|g| T::reshape(T::pow(g, 2.0), &[-1]))
                 .collect();
             let grad_norm = T::sqrt(T::sum_all(T::concat(&grad_norms[..], 0)));
-            let grad_scale = T::clip(grad_norm, 0.0, 1.0) / grad_norm;
+            let grad_scale = T::clip(grad_norm, 0.0, GRAD_CLIP) / grad_norm;
             let grads_clipped: Vec<_> = grads.iter().map(|g| g * grad_scale).collect();
 
             let update = opt.get_update_op(&vars[..], &grads_clipped[..], g);
@@ -430,7 +314,6 @@ fn start_self_play_thread(_index: usize, ctx: Arc<TrainContext>) -> thread::Join
     thread::spawn(move || loop {
         let mut examples = Vec::new();
         for ex in ctx.clone_latest_env().gen_self_play() {
-            examples.push(ex.clone_flipped());
             examples.push(ex);
         }
         ctx.add_examples(examples.into_iter());
