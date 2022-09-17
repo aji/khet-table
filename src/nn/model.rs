@@ -10,11 +10,12 @@ use rand::Rng;
 use super::constants::*;
 use super::Float;
 
-fn relu_norm_conv_2d<'g, X, W, B>(
-    training: bool,
+fn relu_norm_conv_2d<'g, X, W, B, Gamma, Beta>(
     x: X,
     w: W,
     b: B,
+    bn_gamma: Gamma,
+    bn_beta: Beta,
     pad: usize,
     stride: usize,
 ) -> ag::Tensor<'g, Float>
@@ -22,13 +23,13 @@ where
     X: AsRef<ag::Tensor<'g, Float>> + Copy,
     W: AsRef<ag::Tensor<'g, Float>> + Copy,
     B: AsRef<ag::Tensor<'g, Float>> + Copy,
+    Gamma: AsRef<ag::Tensor<'g, Float>> + Copy,
+    Beta: AsRef<ag::Tensor<'g, Float>> + Copy,
 {
     let x = T::conv2d(x, w, pad, stride) + T::reshape(b, &[1, -1, 1, 1]);
-    if training {
-        T::normalize(x, &[0, 2, 3])
-    } else {
-        x
-    };
+    let x = T::normalize(x, &[0, 2, 3]);
+    let x = x * T::reshape(bn_gamma.as_ref(), &[1, -1, 1, 1])
+        + T::reshape(bn_beta.as_ref(), &[1, -1, 1, 1]);
     T::leaky_relu(x, LEAK)
 }
 
@@ -54,20 +55,28 @@ pub struct KhetModel {
 struct Encoder {
     conv: VariableID,
     conv_bias: VariableID,
+    conv_bn_gamma: VariableID,
+    conv_bn_beta: VariableID,
 }
 
 #[derive(Clone)]
 struct ResBlock {
     conv1: VariableID,
     conv1_bias: VariableID,
+    conv1_bn_gamma: VariableID,
+    conv1_bn_beta: VariableID,
     conv2: VariableID,
     conv2_bias: VariableID,
+    conv2_bn_gamma: VariableID,
+    conv2_bn_beta: VariableID,
 }
 
 #[derive(Clone)]
 struct PolicyHead {
     conv: VariableID,
     conv_bias: VariableID,
+    conv_bn_gamma: VariableID,
+    conv_bn_beta: VariableID,
     fc: VariableID,
     fc_bias: VariableID,
 }
@@ -76,6 +85,8 @@ struct PolicyHead {
 struct ValueHead {
     conv: VariableID,
     conv_bias: VariableID,
+    conv_bn_gamma: VariableID,
+    conv_bn_beta: VariableID,
     fc1: VariableID,
     fc1_bias: VariableID,
     fc2: VariableID,
@@ -122,6 +133,14 @@ impl KhetModel {
                     .slot()
                     .name("enc_conv_bias")
                     .set(init.conv_bias(N_FILTERS)),
+                conv_bn_gamma: ns
+                    .slot()
+                    .name("enc_conv_bn_gamma")
+                    .set(init.conv_bias(N_FILTERS)),
+                conv_bn_beta: ns
+                    .slot()
+                    .name("enc_conv_bn_beta")
+                    .set(init.conv_bias(N_FILTERS)),
             },
 
             res_blocks: (0..N_BLOCKS)
@@ -134,6 +153,14 @@ impl KhetModel {
                         .slot()
                         .name(format!("res{}_conv1_bias", i))
                         .set(init.conv_bias(N_FILTERS)),
+                    conv1_bn_gamma: ns
+                        .slot()
+                        .name(format!("res{}_conv1_bn_gamma", i))
+                        .set(init.conv_bias(N_FILTERS)),
+                    conv1_bn_beta: ns
+                        .slot()
+                        .name(format!("res{}_conv1_bn_beta", i))
+                        .set(init.conv_bias(N_FILTERS)),
                     conv2: ns
                         .slot()
                         .name(format!("res{}_conv2", i))
@@ -141,6 +168,14 @@ impl KhetModel {
                     conv2_bias: ns
                         .slot()
                         .name(format!("res{}_conv2_bias", i))
+                        .set(init.conv_bias(N_FILTERS)),
+                    conv2_bn_gamma: ns
+                        .slot()
+                        .name(format!("res{}_conv2_bn_gamma", i))
+                        .set(init.conv_bias(N_FILTERS)),
+                    conv2_bn_beta: ns
+                        .slot()
+                        .name(format!("res{}_conv2_bn_beta", i))
                         .set(init.conv_bias(N_FILTERS)),
                 })
                 .collect(),
@@ -151,6 +186,11 @@ impl KhetModel {
                     .name("policy_conv")
                     .set(init.conv_filter(&[2, N_FILTERS, 1, 1])),
                 conv_bias: ns.slot().name("policy_conv_bias").set(init.conv_bias(2)),
+                conv_bn_gamma: ns
+                    .slot()
+                    .name("policy_conv_bn_gamma")
+                    .set(init.conv_bias(2)),
+                conv_bn_beta: ns.slot().name("policy_conv_bn_beta").set(init.conv_bias(2)),
                 fc: ns
                     .slot()
                     .name("policy_fc")
@@ -167,6 +207,8 @@ impl KhetModel {
                     .name("value_conv")
                     .set(init.conv_filter(&[1, N_FILTERS, 1, 1])),
                 conv_bias: ns.slot().name("value_conv_bias").set(init.conv_bias(1)),
+                conv_bn_gamma: ns.slot().name("value_conv_bn_gamma").set(init.conv_bias(1)),
+                conv_bn_beta: ns.slot().name("value_conv_bn_beta").set(init.conv_bias(1)),
                 fc1: ns
                     .slot()
                     .name("value_fc1")
@@ -188,15 +230,15 @@ impl KhetModel {
     // out ([batch, N_MOVES], [batch])
     pub fn eval<'env, 'name, 'g>(
         &self,
-        training: bool,
         ctx: &'g ag::Context<'env, 'name, Float>,
         input: ag::Tensor<'g, Float>,
     ) -> (ag::Tensor<'g, Float>, ag::Tensor<'g, Float>) {
         let res_input = relu_norm_conv_2d(
-            training,
             input,
             ctx.variable_by_id(self.encoder.conv),
             ctx.variable_by_id(self.encoder.conv_bias),
+            ctx.variable_by_id(self.encoder.conv_bn_gamma),
+            ctx.variable_by_id(self.encoder.conv_bn_beta),
             1,
             1,
         );
@@ -226,18 +268,20 @@ impl KhetModel {
 
                 let x0 = res;
                 let x1 = relu_norm_conv_2d(
-                    training,
                     x0,
                     ctx.variable_by_id(block.conv1),
                     ctx.variable_by_id(block.conv1_bias),
+                    ctx.variable_by_id(block.conv1_bn_gamma),
+                    ctx.variable_by_id(block.conv1_bn_beta),
                     1,
                     1,
                 );
                 let x2 = relu_norm_conv_2d(
-                    training,
                     x1,
                     ctx.variable_by_id(block.conv2),
                     ctx.variable_by_id(block.conv2_bias),
+                    ctx.variable_by_id(block.conv2_bn_gamma),
+                    ctx.variable_by_id(block.conv2_bn_beta),
                     1,
                     1,
                 );
@@ -249,10 +293,11 @@ impl KhetModel {
 
         let policy = {
             let x = relu_norm_conv_2d(
-                training,
                 tower,
                 ctx.variable_by_id(self.policy_head.conv),
                 ctx.variable_by_id(self.policy_head.conv_bias),
+                ctx.variable_by_id(self.policy_head.conv_bn_gamma),
+                ctx.variable_by_id(self.policy_head.conv_bn_beta),
                 0,
                 1,
             );
@@ -266,10 +311,11 @@ impl KhetModel {
 
         let value = {
             let x = relu_norm_conv_2d(
-                training,
                 tower,
                 ctx.variable_by_id(self.value_head.conv),
                 ctx.variable_by_id(self.value_head.conv_bias),
+                ctx.variable_by_id(self.value_head.conv_bn_gamma),
+                ctx.variable_by_id(self.value_head.conv_bn_beta),
                 0,
                 1,
             );

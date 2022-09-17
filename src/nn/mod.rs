@@ -18,7 +18,7 @@ pub mod constants {
 
     pub const SAMPLING_MOVES: usize = 30;
     pub const DRAW_THRESH: usize = 256;
-    pub const TRAIN_ITERS: usize = 800;
+    pub const TRAIN_ITERS: usize = 100;
     pub const ROOT_DIRICHLET_ALPHA: f32 = 0.3;
     pub const ROOT_EXPLORATION_FRACTION: f32 = 0.25;
 
@@ -27,7 +27,7 @@ pub mod constants {
 
     pub const TRAIN_STEPS: usize = 700_000;
     pub const BUFFER_SIZE: usize = 1_000_000;
-    pub const BATCH_SIZE: usize = 1024;
+    pub const BATCH_SIZE: usize = 256;
 
     pub const WEIGHT_DECAY: f32 = 1e-4;
     pub const GRAD_CLIP: f32 = 1.0;

@@ -7,15 +7,15 @@ use super::constants::*;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Params {
-    pub training: bool,
+    pub selfplay: bool,
     pub c_base: f32,
     pub c_init: f32,
 }
 
 impl Params {
-    pub fn default_train() -> Params {
+    pub fn default_selfplay() -> Params {
         Params {
-            training: true,
+            selfplay: true,
             c_base: PUCB_C_BASE,
             c_init: PUCB_C_INIT,
         }
@@ -23,7 +23,7 @@ impl Params {
 
     pub fn default_eval() -> Params {
         Params {
-            training: false,
+            selfplay: false,
             c_base: PUCB_C_BASE,
             c_init: PUCB_C_INIT,
         }
@@ -92,7 +92,7 @@ pub fn run<C: Context>(
         }
     }
 
-    let max_child = if params.training && game.len_plys() < SAMPLING_MOVES {
+    let max_child = if params.selfplay && game.len_plys() < SAMPLING_MOVES {
         root.sample_child_by_visits()
     } else {
         root.max_child_by_visits()
@@ -200,7 +200,7 @@ impl Node {
                 &[-1, N_INPUT_PLANES as isize, 8, 10],
             );
 
-            let (policy, value) = model.eval(false, g, img);
+            let (policy, value) = model.eval(g, img);
             let policy = T::softmax(T::reshape(policy, &[800]), 0);
             let value = T::reshape(value, &[1]);
 
@@ -262,7 +262,7 @@ impl Node {
         let value = if let Some(outcome) = game.outcome() {
             outcome.value() as f32
         } else if self.is_leaf() {
-            self.initialize_children(env, model, params.training && is_root)
+            self.initialize_children(env, model, params.selfplay && is_root)
         } else {
             let e = self
                 .max_child_by_puct_mut(params, game.len_plys() % 2 == 1)

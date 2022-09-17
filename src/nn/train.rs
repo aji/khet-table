@@ -81,7 +81,7 @@ impl TrainEnv {
                 &self.vars,
                 &self.model,
                 &game,
-                &nn::search::Params::default_train(),
+                &nn::search::Params::default_selfplay(),
             );
             positions.push((game.latest().clone(), res.policy));
             game.add_move(&res.m);
@@ -150,7 +150,7 @@ impl TrainEnv {
                 .map(|id| g.variable_by_id(id))
                 .collect();
 
-            let (policy, value) = self.model.eval(true, g, ex_input_t);
+            let (policy, value) = self.model.eval(g, ex_input_t);
             let log_policy = T::log_softmax(T::reshape(policy, &[-1, 800]), 1);
             let value = T::reshape(value, &[-1]);
 
@@ -201,7 +201,7 @@ impl TrainEnv {
                 T::convert_to_tensor(bb::Board::new_classic().nn_image(), g),
                 &[-1, N_INPUT_PLANES as isize, 8, 10],
             );
-            let (_, value) = self.model.eval(false, g, board);
+            let (_, value) = self.model.eval(g, board);
             println!(
                 "\n({}) v={}",
                 self.num_training_iters,
@@ -249,7 +249,7 @@ impl TrainContext {
     fn gen_batch(&self) -> impl IntoIterator<Item = Example> {
         let mut buf = self.buf.lock().unwrap();
 
-        while buf.data.len() < BATCH_SIZE {
+        while buf.data.len() <= 0 {
             buf = self.buf_cond.wait(buf).unwrap();
         }
 
