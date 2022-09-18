@@ -226,6 +226,12 @@ impl KhetModel {
         }
     }
 
+    pub fn open<'env, 'name>(
+        _ns: &ag::variable::VariableNamespace<'env, 'name, Float>,
+    ) -> Result<KhetModel, ()> {
+        todo!()
+    }
+
     // in [batch, N_INPUT_PLANES, N_ROWS, N_COLS]
     // out ([batch, N_MOVES], [batch])
     pub fn eval<'env, 'name, 'g>(

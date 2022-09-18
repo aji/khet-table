@@ -2,11 +2,12 @@ use std::{
     io::Write,
     sync::{Arc, Condvar, Mutex},
     thread,
+    time::Instant,
 };
 
 use crate::{bb, nn};
 use ag::{prelude::*, variable::NamespaceTrait};
-use autograd::{self as ag, tensor_ops as T};
+use autograd::{self as ag, ndarray as nd, tensor_ops as T};
 
 use nn::*;
 
@@ -65,6 +66,24 @@ impl TrainEnv {
         }
     }
 
+    fn try_open(path: &'static str) -> Result<Self, ()> {
+        let mut vars = ag::VariableEnvironment::<Float>::load(path).map_err(|_| ())?;
+        let model = KhetModel::open(&vars.namespace(NS_KHET))?;
+        let opt = ag::optimizers::MomentumSGD::new(
+            0.0,
+            MOMENTUM,
+            vars.namespace(NS_KHET).current_var_ids().into_iter(),
+            &mut vars,
+            NS_OPT,
+        );
+        Ok(Self {
+            vars,
+            model,
+            opt: Arc::new(Mutex::new(opt)),
+            num_training_iters: 0,
+        })
+    }
+
     fn gen_self_play(&self) -> impl Iterator<Item = Example> {
         let mut game = bb::Game::new(bb::Board::new_classic());
         let mut positions: Vec<(bb::Board, Vec<f32>)> = Vec::new();
@@ -110,9 +129,13 @@ impl TrainEnv {
         panic!();
     }
 
-    fn update_weights<I: Iterator<Item = Example>>(&mut self, examples: I) {
-        use ag::ndarray as nd;
-
+    fn grad_calc<I: Iterator<Item = Example>>(
+        &self,
+        examples: I,
+    ) -> (
+        Vec<ag::variable::VariableID>,
+        Vec<nd::ArrayBase<nd::OwnedRepr<f32>, nd::IxDyn>>,
+    ) {
         let positions: Vec<(nd::Array3<Float>, nd::Array1<Float>, Float)> = examples
             .map(|ex| {
                 let image = ex.board.nn_image();
@@ -134,21 +157,13 @@ impl TrainEnv {
             nd::Array::from(values)
         };
 
-        let mut opt = self.opt.lock().unwrap();
-        opt.alpha = self.lr();
-
         self.vars.run(|g| {
             let ex_input_t = g.placeholder("input", &[-1, N_INPUT_PLANES as isize, 8, 10]);
             let ex_policy_t = g.placeholder("policy", &[-1, 800]);
             let ex_value_t = g.placeholder("value", &[-1]);
 
-            let vars: Vec<_> = self
-                .vars
-                .namespace(NS_KHET)
-                .current_var_ids()
-                .into_iter()
-                .map(|id| g.variable_by_id(id))
-                .collect();
+            let var_ids: Vec<_> = self.vars.namespace(NS_KHET).current_var_ids();
+            let vars: Vec<_> = var_ids.iter().map(|id| g.variable_by_id(*id)).collect();
 
             let (policy, value) = self.model.eval(g, ex_input_t);
             let log_policy = T::log_softmax(T::reshape(policy, &[-1, 800]), 1);
@@ -180,18 +195,36 @@ impl TrainEnv {
             let grad_scale = T::clip(grad_norm, 0.0, GRAD_CLIP) / grad_norm;
             let grads_clipped: Vec<_> = grads.iter().map(|g| g * grad_scale).collect();
 
-            let update = opt.get_update_op(&vars[..], &grads_clipped[..], g);
-
-            g.evaluator()
-                .push(update)
+            let grads = g
+                .evaluator()
+                .extend(&grads_clipped[..])
                 .feed("input", ex_input.view())
                 .feed("policy", ex_policy.view())
                 .feed("value", ex_value.view())
                 .run()
                 .into_iter()
-                .for_each(|r| {
-                    r.unwrap();
-                });
+                .map(|r| r.unwrap())
+                .collect::<Vec<_>>();
+
+            (var_ids, grads)
+        })
+    }
+
+    fn grad_apply(
+        &mut self,
+        var_ids: Vec<ag::variable::VariableID>,
+        grads: Vec<nd::ArrayBase<nd::OwnedRepr<f32>, nd::IxDyn>>,
+    ) {
+        let mut opt = self.opt.lock().unwrap();
+        opt.alpha = self.lr();
+
+        self.vars.run(|g| {
+            let vars: Vec<_> = var_ids.into_iter().map(|id| g.variable_by_id(id)).collect();
+            let grads: Vec<_> = grads
+                .into_iter()
+                .map(|arr| T::convert_to_tensor(arr, g))
+                .collect();
+            opt.get_update_op(&vars[..], &grads[..], g).eval(g).unwrap();
         });
 
         self.num_training_iters += 1;
@@ -227,8 +260,8 @@ impl TrainContext {
         self.env.lock().unwrap().clone()
     }
 
-    fn update_env(&self, env: TrainEnv) {
-        *self.env.lock().unwrap() = env;
+    fn alter_env<T, F: FnOnce(&mut TrainEnv) -> T>(&self, f: F) -> T {
+        f(&mut self.env.lock().unwrap())
     }
 
     fn add_examples<I: Iterator<Item = Example>>(&self, it: I) {
@@ -266,12 +299,16 @@ impl TrainContext {
     }
 }
 
-pub fn run_training<F>(f: F)
+pub fn run_training<F>(open: Option<&'static str>, f: F)
 where
     F: Fn(&ag::VariableEnvironment<'static, Float>, &KhetModel) -> () + Send + 'static,
 {
     let ctx = Arc::new(TrainContext {
-        env: Mutex::new(TrainEnv::new()),
+        env: Mutex::new(
+            open.map(|p| TrainEnv::try_open(p).ok())
+                .flatten()
+                .unwrap_or_else(|| TrainEnv::new()),
+        ),
         buf: Mutex::new(Buffer {
             data: Vec::new(),
             start: 0,
@@ -279,14 +316,19 @@ where
         buf_cond: Condvar::new(),
     });
 
+    let n_train_threads = (num_cpus::get() / 8).max(1);
+    let n_self_play_threads = (num_cpus::get() - n_train_threads - 1).max(1);
+
     let user_thread = start_user_thread(ctx.clone(), f);
-    let train_thread = start_training_thread(ctx.clone());
-    let self_play_threads: Vec<_> = (0..num_cpus::get() - 2)
+    let train_threads: Vec<_> = (0..n_train_threads)
+        .map(|i| start_train_thread(i, n_train_threads, ctx.clone()))
+        .collect();
+    let self_play_threads: Vec<_> = (0..n_self_play_threads)
         .map(|i| start_self_play_thread(i, ctx.clone()))
         .collect();
 
     user_thread.join().unwrap();
-    train_thread.join().unwrap();
+    train_threads.into_iter().for_each(|t| t.join().unwrap());
     self_play_threads
         .into_iter()
         .for_each(|t| t.join().unwrap());
@@ -302,11 +344,38 @@ where
     })
 }
 
-fn start_training_thread(ctx: Arc<TrainContext>) -> thread::JoinHandle<()> {
+fn start_train_thread(
+    index: usize,
+    n_train_threads: usize,
+    ctx: Arc<TrainContext>,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || loop {
-        let mut env = ctx.clone_latest_env();
-        env.update_weights(ctx.gen_batch().into_iter());
-        ctx.update_env(env);
+        let start = Instant::now();
+        let env = ctx.clone_latest_env();
+        println!(
+            "({}/{}) env clone {:?}",
+            index + 1,
+            n_train_threads,
+            start.elapsed()
+        );
+
+        let start = Instant::now();
+        let (var_ids, grads) = env.grad_calc(ctx.gen_batch().into_iter());
+        println!(
+            "({}/{}) grad calc {:?}",
+            index + 1,
+            n_train_threads,
+            start.elapsed()
+        );
+
+        let start = Instant::now();
+        ctx.alter_env(|env| env.grad_apply(var_ids, grads));
+        println!(
+            "({}/{}) grad update {:?}",
+            index + 1,
+            n_train_threads,
+            start.elapsed()
+        );
     })
 }
 

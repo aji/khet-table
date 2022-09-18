@@ -17,7 +17,7 @@ use khet::{
 fn main() {
     let train_start = Instant::now();
 
-    nn::train::run_training(move |env, model| {
+    nn::train::run_training(None, move |env, model| {
         let start_time = train_start.elapsed();
 
         env.save("weights.json").unwrap();
