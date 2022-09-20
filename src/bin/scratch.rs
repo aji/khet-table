@@ -38,7 +38,7 @@ fn main() {
             |stats: Stats| {
                 let total_played = stats.p1_win + stats.p1_draw + stats.p1_lose;
                 println!(
-                    "\n({}/{}) ({}/{}/{}) elo={:+6.0}",
+                    "({}/{}) ({}/{}/{}) elo={:+6.0}",
                     total_played,
                     stats.num_games,
                     stats.p1_win,

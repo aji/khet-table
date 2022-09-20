@@ -139,10 +139,6 @@ where
             };
         }
 
-        if !display {
-            print!("*");
-            std::io::stdout().lock().flush().unwrap();
-        }
         game.add_move(&m);
 
         if let Some(outcome) = game.outcome() {

@@ -1,5 +1,4 @@
 use std::{
-    io::Write,
     sync::{Arc, Condvar, Mutex},
     thread,
     time::Instant,
@@ -14,26 +13,29 @@ use nn::*;
 const NS_KHET: &'static str = "khet";
 const NS_OPT: &'static str = "opt";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Example {
     board: bb::Board,
     policy: Vec<f32>,
     value: f32,
+    cost: usize,
 }
 
 impl Example {
-    fn new(board: bb::Board, policy: Vec<f32>, value: f32) -> Example {
+    fn new(board: bb::Board, policy: Vec<f32>, value: f32, cost: usize) -> Example {
         if board.white_to_move() {
             Example {
                 board,
                 policy,
                 value,
+                cost,
             }
         } else {
             Example {
                 board: board.flip_and_rotate(),
                 policy: bb::MoveSet::nn_rotate(&policy),
                 value: -value,
+                cost,
             }
         }
     }
@@ -84,14 +86,14 @@ impl TrainEnv {
         })
     }
 
-    fn gen_self_play(&self) -> impl Iterator<Item = Example> {
+    fn gen_self_play(&self, cost: usize) -> impl Iterator<Item = Example> {
         let mut game = bb::Game::new(bb::Board::new_classic());
         let mut positions: Vec<(bb::Board, Vec<f32>)> = Vec::new();
 
         while game.outcome().is_none() && game.len_plys() < DRAW_THRESH {
             let res = nn::search::run(
                 |stats: nn::search::Stats| {
-                    if stats.iterations >= TRAIN_ITERS {
+                    if stats.iterations >= cost {
                         nn::search::Signal::Abort
                     } else {
                         nn::search::Signal::Continue
@@ -106,21 +108,31 @@ impl TrainEnv {
             game.add_move(&res.m);
         }
 
-        match game.outcome() {
-            None => print!("T"),
-            Some(bb::GameOutcome::Draw) => print!("D"),
-            Some(bb::GameOutcome::WhiteWins) => print!("W"),
-            Some(bb::GameOutcome::RedWins) => print!("R"),
-        }
-        std::io::stdout().lock().flush().unwrap();
+        let value = match game.outcome() {
+            None => {
+                print!("T ");
+                0.0
+            }
+            Some(bb::GameOutcome::Draw) => {
+                print!("D ");
+                0.0
+            }
+            Some(bb::GameOutcome::WhiteWins) => {
+                print!("W ");
+                1.0
+            }
+            Some(bb::GameOutcome::RedWins) => {
+                print!("R ");
+                -1.0
+            }
+        };
 
-        let value = game.outcome().unwrap_or(bb::GameOutcome::Draw).value() as f32;
         return positions
             .into_iter()
-            .map(move |(board, policy)| Example::new(board, policy, value));
+            .map(move |(board, policy)| Example::new(board, policy, value, cost));
     }
 
-    fn lr(&self) -> f32 {
+    fn learning_rate(&self) -> f32 {
         for (cutoff, lr) in LR_SCHEDULE.iter().copied().rev() {
             if cutoff <= self.num_training_iters {
                 return lr;
@@ -135,6 +147,7 @@ impl TrainEnv {
     ) -> (
         Vec<ag::variable::VariableID>,
         Vec<nd::ArrayBase<nd::OwnedRepr<f32>, nd::IxDyn>>,
+        f32,
     ) {
         let positions: Vec<(nd::Array3<Float>, nd::Array1<Float>, Float)> = examples
             .map(|ex| {
@@ -165,7 +178,7 @@ impl TrainEnv {
             let var_ids: Vec<_> = self.vars.namespace(NS_KHET).current_var_ids();
             let vars: Vec<_> = var_ids.iter().map(|id| g.variable_by_id(*id)).collect();
 
-            let (policy, value) = self.model.eval(g, ex_input_t);
+            let (policy, value) = self.model.eval(g, ex_input_t, false);
             let log_policy = T::log_softmax(T::reshape(policy, &[-1, 800]), 1);
             let value = T::reshape(value, &[-1]);
 
@@ -182,22 +195,26 @@ impl TrainEnv {
                 .reduce(|a, b| a + b)
                 .expect("no variables?");
 
-            let total_loss = (T::reduce_sum(value_loss - neg_policy_loss, &[0], false)
-                + WEIGHT_DECAY * weight_decay)
-                .show_prefixed("\nLOSS");
+            let mean_loss = T::reduce_mean(value_loss - neg_policy_loss, &[0], false)
+                + WEIGHT_DECAY * weight_decay;
 
-            let grads: Vec<_> = T::grad(&[total_loss], &vars[..]);
-            let grad_norms: Vec<_> = grads
+            let grads: Vec<_> = T::grad(&[mean_loss], &vars[..]);
+            //let grad_norms: Vec<_> = grads
+            //    .iter()
+            //    .map(|g| T::reshape(T::pow(g, 2.0), &[-1]))
+            //    .collect();
+            //let grad_norm = T::sqrt(T::sum_all(T::concat(&grad_norms[..], 0)));
+            //let grad_scale = T::clip(grad_norm, 0.0, GRAD_CLIP) / grad_norm;
+            //let grads_clipped: Vec<_> = grads.iter().map(|g| g * grad_scale).collect();
+            let grads_clipped: Vec<_> = grads
                 .iter()
-                .map(|g| T::reshape(T::pow(g, 2.0), &[-1]))
+                .map(|g| T::clip(g, -GRAD_CLIP, GRAD_CLIP))
                 .collect();
-            let grad_norm = T::sqrt(T::sum_all(T::concat(&grad_norms[..], 0)));
-            let grad_scale = T::clip(grad_norm, 0.0, GRAD_CLIP) / grad_norm;
-            let grads_clipped: Vec<_> = grads.iter().map(|g| g * grad_scale).collect();
 
-            let grads = g
+            let mut result = g
                 .evaluator()
                 .extend(&grads_clipped[..])
+                .push(&mean_loss)
                 .feed("input", ex_input.view())
                 .feed("policy", ex_policy.view())
                 .feed("value", ex_value.view())
@@ -206,7 +223,8 @@ impl TrainEnv {
                 .map(|r| r.unwrap())
                 .collect::<Vec<_>>();
 
-            (var_ids, grads)
+            let loss = result.pop().unwrap();
+            (var_ids, result, *loss.first().unwrap())
         })
     }
 
@@ -216,7 +234,7 @@ impl TrainEnv {
         grads: Vec<nd::ArrayBase<nd::OwnedRepr<f32>, nd::IxDyn>>,
     ) {
         let mut opt = self.opt.lock().unwrap();
-        opt.alpha = self.lr();
+        opt.alpha = self.learning_rate();
 
         self.vars.run(|g| {
             let vars: Vec<_> = var_ids.into_iter().map(|id| g.variable_by_id(id)).collect();
@@ -228,19 +246,6 @@ impl TrainEnv {
         });
 
         self.num_training_iters += 1;
-
-        self.vars.run(|g| {
-            let board = T::reshape(
-                T::convert_to_tensor(bb::Board::new_classic().nn_image(), g),
-                &[-1, N_INPUT_PLANES as isize, 8, 10],
-            );
-            let (_, value) = self.model.eval(g, board);
-            println!(
-                "\n({}) v={}",
-                self.num_training_iters,
-                value.eval(g).unwrap()
-            );
-        });
     }
 }
 
@@ -253,6 +258,13 @@ struct TrainContext {
 struct Buffer {
     data: Vec<Example>,
     start: usize,
+    total_cost: usize,
+    total_value: f32,
+    all_time_added: usize,
+    all_time_cost: usize,
+    all_time_value: f32,
+    all_time_value_0: f32,
+    last_stats_print: Instant,
 }
 
 impl TrainContext {
@@ -264,17 +276,55 @@ impl TrainContext {
         f(&mut self.env.lock().unwrap())
     }
 
-    fn add_examples<I: Iterator<Item = Example>>(&self, it: I) {
-        let mut buf = &mut *self.buf.lock().unwrap();
-
-        for ex in it {
-            if buf.data.len() >= BUFFER_SIZE {
-                buf.data[buf.start] = ex;
-                buf.start = (buf.start + 1) % BUFFER_SIZE;
-            } else {
-                buf.data.push(ex);
+    fn self_play_cost(&self) -> usize {
+        let added = self.buf.lock().unwrap().all_time_added;
+        for (cutoff, cost) in SELF_PLAY_COST_SCHEDULE.iter().copied().rev() {
+            if cutoff <= added {
+                return cost;
             }
         }
+        panic!();
+    }
+
+    fn add_examples<I: Iterator<Item = Example>>(&self, it: I) {
+        let _ = {
+            let mut buf = &mut *self.buf.lock().unwrap();
+
+            for (i, ex) in it.enumerate() {
+                buf.total_cost += ex.cost;
+                buf.total_value += ex.value;
+                buf.all_time_cost += ex.cost;
+                buf.all_time_added += 1;
+                buf.all_time_value += ex.value;
+                if i == 0 {
+                    buf.all_time_value_0 += ex.value;
+                }
+
+                if buf.data.len() >= BUFFER_SIZE {
+                    let old = std::mem::replace(&mut buf.data[buf.start], ex);
+                    buf.start = (buf.start + 1) % BUFFER_SIZE;
+                    buf.total_value -= old.value;
+                    buf.total_cost -= old.cost;
+                } else {
+                    buf.data.push(ex);
+                }
+            }
+
+            if buf.last_stats_print.elapsed() > BUFFER_PRINT_INTERVAL {
+                buf.last_stats_print = Instant::now();
+                println!(
+                    "[BUF] {:.1}% m($)={:.0} m(v)={:+.4} {:13} ALL TIME {:.1}% m($)={:.0} m(v)={:+.4} m(v0)={:+.4}",
+                    100.0 * buf.data.len() as f64 / BUFFER_SIZE as f64,
+                    buf.total_cost as f64 / buf.data.len() as f64,
+                    buf.total_value as f64 / buf.data.len() as f64,
+                    buf.all_time_added,
+                    100.0 * buf.all_time_added as f64 / BUFFER_SIZE as f64,
+                    buf.all_time_cost as f64 / buf.all_time_added as f64,
+                    buf.all_time_value as f64 / buf.all_time_added as f64,
+                    buf.all_time_value_0 as f64 / buf.all_time_added as f64,
+                );
+            }
+        };
 
         self.buf_cond.notify_all();
     }
@@ -285,13 +335,6 @@ impl TrainContext {
         while buf.data.len() <= 0 {
             buf = self.buf_cond.wait(buf).unwrap();
         }
-
-        println!(
-            "buffer: {:.1}% ({}/{})",
-            100. * buf.data.len() as f64 / BUFFER_SIZE as f64,
-            buf.data.len(),
-            BUFFER_SIZE
-        );
 
         (0..BATCH_SIZE)
             .map(|_| buf.data[rand::random::<usize>() % buf.data.len()].clone())
@@ -312,6 +355,13 @@ where
         buf: Mutex::new(Buffer {
             data: Vec::new(),
             start: 0,
+            total_cost: 0,
+            total_value: 0.0,
+            all_time_added: 0,
+            all_time_cost: 0,
+            all_time_value: 0.0,
+            all_time_value_0: 0.0,
+            last_stats_print: Instant::now(),
         }),
         buf_cond: Condvar::new(),
     });
@@ -345,44 +395,38 @@ where
 }
 
 fn start_train_thread(
-    index: usize,
-    n_train_threads: usize,
+    _index: usize,
+    _n_train_threads: usize,
     ctx: Arc<TrainContext>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || loop {
-        let start = Instant::now();
         let env = ctx.clone_latest_env();
-        println!(
-            "({}/{}) env clone {:?}",
-            index + 1,
-            n_train_threads,
-            start.elapsed()
-        );
-
-        let start = Instant::now();
-        let (var_ids, grads) = env.grad_calc(ctx.gen_batch().into_iter());
-        println!(
-            "({}/{}) grad calc {:?}",
-            index + 1,
-            n_train_threads,
-            start.elapsed()
-        );
-
-        let start = Instant::now();
-        ctx.alter_env(|env| env.grad_apply(var_ids, grads));
-        println!(
-            "({}/{}) grad update {:?}",
-            index + 1,
-            n_train_threads,
-            start.elapsed()
-        );
+        let (var_ids, grads, loss) = env.grad_calc(ctx.gen_batch().into_iter());
+        ctx.alter_env(|env| {
+            env.grad_apply(var_ids, grads);
+            let v1 = env.vars.run(|g| {
+                let board = T::reshape(
+                    T::convert_to_tensor(bb::Board::new_classic().nn_image(), g),
+                    &[-1, N_INPUT_PLANES as isize, 8, 10],
+                );
+                let (_, value) = env.model.eval(g, board, true);
+                value.eval(g).unwrap()
+            });
+            println!(
+                "[TRAIN] {} lr={} loss={:.3} v={:+.4}",
+                env.num_training_iters,
+                env.learning_rate(),
+                loss,
+                v1[0],
+            );
+        });
     })
 }
 
 fn start_self_play_thread(_index: usize, ctx: Arc<TrainContext>) -> thread::JoinHandle<()> {
     thread::spawn(move || loop {
         let mut examples = Vec::new();
-        for ex in ctx.clone_latest_env().gen_self_play() {
+        for ex in ctx.clone_latest_env().gen_self_play(ctx.self_play_cost()) {
             examples.push(ex);
         }
         ctx.add_examples(examples.into_iter());

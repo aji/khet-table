@@ -185,6 +185,7 @@ impl Node {
         &mut self,
         env: &ag::VariableEnvironment<nn::Float>,
         model: &nn::KhetModel,
+        game: bb::Game,
         add_exploration_noise: bool,
     ) -> f32 {
         let (mut policy, value) = env.run(|g| {
@@ -200,7 +201,7 @@ impl Node {
                 &[-1, N_INPUT_PLANES as isize, 8, 10],
             );
 
-            let (policy, value) = model.eval(g, img);
+            let (policy, value) = model.eval(g, img, true);
             let policy = T::softmax(T::reshape(policy, &[800]), 0);
             let value = T::reshape(value, &[1]);
 
@@ -240,15 +241,29 @@ impl Node {
                     board.switch_turn();
                     board
                 };
+                let this_value = if game.would_draw(&board) {
+                    0.0
+                } else if board.is_terminal() {
+                    if board.white_wins() {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                } else {
+                    value
+                };
                 Edge {
                     index,
                     prior,
-                    node: Node::new(board, value, 1),
+                    node: Node::new(board, this_value, 1),
                 }
             })
             .collect();
 
-        value
+        let total_value: f32 = self.children.iter().map(|e| e.node.total_value).sum();
+        let total_visits: usize = self.children.iter().map(|e| e.node.visits).sum();
+
+        total_value / total_visits as f32
     }
 
     fn expand(
@@ -262,7 +277,7 @@ impl Node {
         let value = if let Some(outcome) = game.outcome() {
             outcome.value() as f32
         } else if self.is_leaf() {
-            self.initialize_children(env, model, params.selfplay && is_root)
+            self.initialize_children(env, model, game, params.selfplay && is_root)
         } else {
             let e = self
                 .max_child_by_puct_mut(params, game.len_plys() % 2 == 1)
