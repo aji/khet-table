@@ -109,22 +109,10 @@ impl TrainEnv {
         }
 
         let value = match game.outcome() {
-            None => {
-                print!("T ");
-                0.0
-            }
-            Some(bb::GameOutcome::Draw) => {
-                print!("D ");
-                0.0
-            }
-            Some(bb::GameOutcome::WhiteWins) => {
-                print!("W ");
-                1.0
-            }
-            Some(bb::GameOutcome::RedWins) => {
-                print!("R ");
-                -1.0
-            }
+            None => 0.0,
+            Some(bb::GameOutcome::Draw) => 0.0,
+            Some(bb::GameOutcome::WhiteWins) => 1.0,
+            Some(bb::GameOutcome::RedWins) => -1.0,
         };
 
         return positions
@@ -199,17 +187,20 @@ impl TrainEnv {
                 + WEIGHT_DECAY * weight_decay;
 
             let grads: Vec<_> = T::grad(&[mean_loss], &vars[..]);
-            //let grad_norms: Vec<_> = grads
-            //    .iter()
-            //    .map(|g| T::reshape(T::pow(g, 2.0), &[-1]))
-            //    .collect();
-            //let grad_norm = T::sqrt(T::sum_all(T::concat(&grad_norms[..], 0)));
-            //let grad_scale = T::clip(grad_norm, 0.0, GRAD_CLIP) / grad_norm;
-            //let grads_clipped: Vec<_> = grads.iter().map(|g| g * grad_scale).collect();
-            let grads_clipped: Vec<_> = grads
-                .iter()
-                .map(|g| T::clip(g, -GRAD_CLIP, GRAD_CLIP))
-                .collect();
+            let grads_clipped: Vec<_> = if GRAD_CLIP_L2_NORM {
+                let grad_norms: Vec<_> = grads
+                    .iter()
+                    .map(|g| T::reshape(T::pow(g, 2.0), &[-1]))
+                    .collect();
+                let grad_norm = T::sqrt(T::sum_all(T::concat(&grad_norms[..], 0)));
+                let grad_scale = T::clip(grad_norm, 0.0, GRAD_CLIP) / grad_norm;
+                grads.iter().map(|g| g * grad_scale).collect()
+            } else {
+                grads
+                    .iter()
+                    .map(|g| T::clip(g, -GRAD_CLIP, GRAD_CLIP))
+                    .collect()
+            };
 
             let mut result = g
                 .evaluator()
@@ -366,7 +357,7 @@ where
         buf_cond: Condvar::new(),
     });
 
-    let n_train_threads = (num_cpus::get() / 8).max(1);
+    let n_train_threads = 1;
     let n_self_play_threads = (num_cpus::get() - n_train_threads - 1).max(1);
 
     let user_thread = start_user_thread(ctx.clone(), f);
@@ -399,19 +390,21 @@ fn start_train_thread(
     _n_train_threads: usize,
     ctx: Arc<TrainContext>,
 ) -> thread::JoinHandle<()> {
+    let mut last_train = Instant::now();
     thread::spawn(move || loop {
-        let env = ctx.clone_latest_env();
+        let mut env = ctx.clone_latest_env();
         let (var_ids, grads, loss) = env.grad_calc(ctx.gen_batch().into_iter());
-        ctx.alter_env(|env| {
-            env.grad_apply(var_ids, grads);
-            let v1 = env.vars.run(|g| {
-                let board = T::reshape(
-                    T::convert_to_tensor(bb::Board::new_classic().nn_image(), g),
-                    &[-1, N_INPUT_PLANES as isize, 8, 10],
-                );
-                let (_, value) = env.model.eval(g, board, true);
-                value.eval(g).unwrap()
-            });
+        env.grad_apply(var_ids, grads);
+        let v1 = env.vars.run(|g| {
+            let board = T::reshape(
+                T::convert_to_tensor(bb::Board::new_classic().nn_image(), g),
+                &[-1, N_INPUT_PLANES as isize, 8, 10],
+            );
+            let (_, value) = env.model.eval(g, board, true);
+            value.eval(g).unwrap()
+        });
+        if last_train.elapsed() > TRAIN_PRINT_INTERVAL {
+            last_train = Instant::now();
             println!(
                 "[TRAIN] {} lr={} loss={:.3} v={:+.4}",
                 env.num_training_iters,
@@ -419,7 +412,8 @@ fn start_train_thread(
                 loss,
                 v1[0],
             );
-        });
+        }
+        ctx.alter_env(|x| *x = env);
     })
 }
 

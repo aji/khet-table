@@ -28,7 +28,7 @@ fn main() {
         let out = compare(
             p1,
             p2,
-            20,
+            2,
             FischerClockConfig::new(
                 Duration::from_secs_f64(10.0),
                 Duration::from_secs_f64(0.1),

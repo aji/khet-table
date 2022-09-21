@@ -8,9 +8,9 @@ pub mod train;
 pub mod constants {
     use std::time::Duration;
 
-    pub const N_FILTERS: usize = 20;
-    pub const N_BLOCKS: usize = 3;
-    pub const N_VALUE_HIDDEN: usize = 64;
+    pub const N_FILTERS: usize = 16;
+    pub const N_BLOCKS: usize = 2;
+    pub const N_VALUE_HIDDEN: usize = 32;
 
     pub const N_MOVES: usize = 800;
     pub const N_ROWS: usize = 8;
@@ -39,19 +39,15 @@ pub mod constants {
     ];
 
     pub const BATCH_SIZE: usize = 128;
-    pub const WEIGHT_DECAY: f32 = 1e-5;
-    pub const GRAD_CLIP: f32 = 1e-2;
-    pub const MOMENTUM: f32 = 0.9;
-    pub const LR_SCHEDULE: [(usize, f32); 6] = [
-        (0, 6e-2),
-        (1_000, 2e-2),
-        (100_000, 6e-3),
-        (300_000, 2e-3),
-        (500_000, 6e-4),
-        (700_000, 2e-4),
-    ];
+    pub const WEIGHT_DECAY: f32 = 1e-4;
+    pub const GRAD_CLIP: f32 = 1.0;
+    pub const GRAD_CLIP_L2_NORM: bool = true;
+    pub const MOMENTUM: f32 = 0.7;
+    pub const LR_SCHEDULE: [(usize, f32); 4] =
+        [(0, 2e-1), (100_000, 2e-2), (300_000, 2e-3), (500_000, 2e-4)];
 
-    pub const BUFFER_PRINT_INTERVAL: Duration = Duration::ZERO;
+    pub const BUFFER_PRINT_INTERVAL: Duration = Duration::from_secs(1);
+    pub const TRAIN_PRINT_INTERVAL: Duration = Duration::from_secs(1);
 }
 
 pub use constants::*;
