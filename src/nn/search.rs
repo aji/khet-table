@@ -38,6 +38,7 @@ pub struct Stats {
     pub tree_size: usize,
     pub tree_max_height: usize,
     pub tree_min_height: usize,
+    pub pv_depth: usize,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -47,14 +48,14 @@ pub enum Signal {
 }
 
 pub trait Context {
-    fn defer(&mut self, stats: Stats) -> Signal;
+    fn defer(&mut self, stats: &Stats) -> Signal;
 }
 
 impl<F> Context for F
 where
-    F: FnMut(Stats) -> Signal,
+    F: FnMut(&Stats) -> Signal,
 {
-    fn defer(&mut self, stats: Stats) -> Signal {
+    fn defer(&mut self, stats: &Stats) -> Signal {
         (*self)(stats)
     }
 }
@@ -63,6 +64,7 @@ pub struct Output {
     pub m: bb::Move,
     pub policy: Vec<f32>,
     pub value: f32,
+    pub stats: Stats,
 }
 
 pub fn run<C: Context>(
@@ -74,20 +76,23 @@ pub fn run<C: Context>(
 ) -> Output {
     let mut iters = 0;
     let mut root = Node::new(*game.latest(), 0.0, 0);
+    let mut stats: Stats;
 
     loop {
-        iters += 1;
         root.expand(env, model, params, game.clone(), true);
 
-        let signal = ctx.defer(Stats {
+        iters += 1;
+        stats = Stats {
             iterations: iters,
             policy: root.implied_policy(),
             root_value: root.total_value / root.visits as f32,
             tree_size: root.size,
             tree_max_height: root.max_height,
             tree_min_height: root.min_height,
-        });
-        if let Signal::Abort = signal {
+            pv_depth: root.pv_depth(),
+        };
+
+        if let Signal::Abort = ctx.defer(&stats) {
             break;
         }
     }
@@ -103,6 +108,7 @@ pub fn run<C: Context>(
         m: bb::Move::nn_ith(max_child.index),
         policy: root.implied_policy(),
         value: max_child.node.expected_value(),
+        stats,
     }
 }
 
@@ -151,6 +157,12 @@ impl Node {
         let total: f32 = policy.iter().sum();
         policy.iter_mut().for_each(|x| *x /= total);
         policy
+    }
+
+    fn pv_depth(&self) -> usize {
+        self.max_child_by_visits()
+            .map(|e| 1 + e.node.pv_depth())
+            .unwrap_or(1)
     }
 
     fn max_child_by_visits(&self) -> Option<&Edge> {

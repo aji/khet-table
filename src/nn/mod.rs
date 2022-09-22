@@ -8,8 +8,8 @@ pub mod train;
 pub mod constants {
     use std::time::Duration;
 
-    pub const N_FILTERS: usize = 16;
-    pub const N_BLOCKS: usize = 2;
+    pub const N_FILTERS: usize = 28;
+    pub const N_BLOCKS: usize = 3;
     pub const N_VALUE_HIDDEN: usize = 32;
 
     pub const N_MOVES: usize = 800;
@@ -29,6 +29,7 @@ pub mod constants {
     pub const PUCB_C_INIT: f32 = 1.25;
 
     pub const BUFFER_SIZE: usize = 2_000_000;
+    pub const TRAIN_TEST_RATIO: usize = 10;
     pub const SELF_PLAY_COST_SCHEDULE: [(usize, usize); 6] = [
         (0, 50),
         (10_000, 100),
@@ -38,7 +39,7 @@ pub mod constants {
         (500_000, 800),
     ];
 
-    pub const BATCH_SIZE: usize = 128;
+    pub const BATCH_SIZE: usize = 32;
     pub const WEIGHT_DECAY: f32 = 1e-4;
     pub const GRAD_CLIP: f32 = 1.0;
     pub const GRAD_CLIP_L2_NORM: bool = true;
