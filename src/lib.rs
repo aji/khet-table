@@ -13,6 +13,7 @@ extern crate typed_arena;
 
 pub mod agent;
 pub mod bb;
+pub mod bexpr;
 pub mod board;
 pub mod clock;
 pub mod compare;

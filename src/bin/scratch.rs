@@ -8,7 +8,7 @@ use std::{
 use autograd as ag;
 
 use khet::{
-    agent,
+    agent, bb,
     clock::FischerClockConfig,
     compare::compare,
     nn::{self, search::Params},
@@ -19,6 +19,7 @@ const WIN_RATE_MOMENTUM: f32 = 0.9;
 fn main() {
     let train_start = Instant::now();
     let mut win_rate: f32 = 0.5;
+    let mut compare_iters: usize = 0;
     let mut all_time_played: usize = 0;
 
     write!(
@@ -53,6 +54,14 @@ fn main() {
         let out = compare(
             p1,
             p2,
+            match compare_iters % 5 {
+                0 => bb::Board::new_classic(),
+                1 => bb::Board::new_dynasty(),
+                2 => bb::Board::new_imhotep(),
+                3 => bb::Board::new_mercury(),
+                4 => bb::Board::new_sophie(),
+                _ => panic!(),
+            },
             2,
             FischerClockConfig::new(
                 Duration::from_secs_f64(10.0),
@@ -60,10 +69,18 @@ fn main() {
                 Duration::from_secs_f64(10.0),
             ),
             100,
-            |_| {},
+            |_, outcome| {
+                let s = match outcome {
+                    khet::bb::GameOutcome::Draw => "DRAW",
+                    khet::bb::GameOutcome::WhiteWins => "WHITE",
+                    khet::bb::GameOutcome::RedWins => "RED",
+                };
+                println!("\x1b[1;31m{}\x1b[0m", s);
+            },
             false,
         );
 
+        compare_iters += 1;
         all_time_played += out.num_games;
         win_rate = (1.0 - WIN_RATE_MOMENTUM)
             * ((out.p1_win as f32 + out.p1_draw as f32 * 0.5) / out.num_games as f32)

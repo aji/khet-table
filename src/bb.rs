@@ -1,7 +1,11 @@
 use autograd as ag;
 use std::fmt;
 
-use crate::nn::{self, N_INPUT_PLANES};
+use crate::{
+    bexpr,
+    board::{self, Direction},
+    nn::{self, N_INPUT_PLANES},
+};
 
 macro_rules! bb_dbg {
     () => {};
@@ -229,6 +233,62 @@ impl Board {
             n: 0x_0000_0000_0040_0221_0094_0000_0004_00f1,
             e: 0x_0004_0000_0000_0234_0234_0008_0004_0071,
         }
+    }
+
+    pub fn new_dynasty() -> Board {
+        let b = bexpr::parse(
+            " *Xv .   .   .   *<v *Av *v> .   .   .
+            | .   .   .   .   .   *P  .   .   .   .
+            | *^> .   .   .   *<v *Av */  .   .   .
+            | *v> .   *\\ .   <^  .   v>  .   .   .
+            | .   .   .   *<^ .   *v> .   \\  .   <^
+            | .   .   .   /   A^  ^>  .   .   .   <v
+            | .   .   .   .   P   .   .   .   .   .
+            | .   .   .   <^  A^  ^>  .   .   .   X^",
+        );
+        Board::from(b.unwrap())
+    }
+
+    pub fn new_imhotep() -> Board {
+        let b = bexpr::parse(
+            " *Xv .   .   .   *Av *P  *Av */  .   .
+            | .   .   .   .   .   .   .   .   .   .
+            | .   .   .   <^  .   .   *^> .   .   .
+            | *^> <v  .   .   v>  */  .   .   *v> <^
+            | *v> <^  .   .   /   *<^ .   .   *^> <v
+            | .   .   .   <v  .   .   *v> .   .   .
+            | .   .   .   .   .   .   .   .   .   .
+            | .   .   /   A^  P   A^  .   .   .   X^",
+        );
+        Board::from(b.unwrap())
+    }
+
+    pub fn new_mercury() -> Board {
+        let b = bexpr::parse(
+            " *Xv .   .   .   *<v *P  *v> .   .   /
+            | .   .   .   .   .   *Av *v> .   .   .
+            | *v> .   .   */  .   *Av .   .   .   .
+            | *^> .   .   .   <^  .   .   .   <v  .
+            | .   *^> .   .   .   *v> .   .   .   <v
+            | .   .   .   .   A^  .   /   .   .   <^
+            | .   .   .   <^  A^  .   .   .   .   .
+            | */  .   .   <^  P   ^>  .   .   .   X^",
+        );
+        Board::from(b.unwrap())
+    }
+
+    pub fn new_sophie() -> Board {
+        let b = bexpr::parse(
+            " *Xv .   .   .   *P  <^  *v> .   .   .
+            | .   .   .   *Av .   *A> .   .   .   <v
+            | *^> .   .   .   *<v *v> .   /   .   <^
+            | .   .   .   .   .   .   .   *\\ .   .
+            | .   .   \\  .   .   .   .   .   .   .
+            | *v> .   */  .   <^  ^>  .   .   .   <v
+            | *^> .   .   .   <A  .   A^  .   .   .
+            | .   .   .   <^  *v> P   .   .   .   X^",
+        );
+        Board::from(b.unwrap())
     }
 
     pub fn white_to_move(&self) -> bool {
@@ -617,6 +677,59 @@ impl PartialEq for Board {
 }
 
 impl Eq for Board {}
+
+impl From<board::Board> for Board {
+    fn from(b: board::Board) -> Self {
+        let mut res = Board::new_empty();
+
+        for loc in board::Location::all() {
+            let m = 1u128 << ((7 - loc.rank().to_row()) * 16 + (9 - loc.file().to_col()));
+
+            let piece = match b[loc] {
+                Some(x) => x,
+                None => continue,
+            };
+
+            match piece.color() {
+                board::Color::White => res.w |= m,
+                board::Color::Red => res.r |= m,
+            }
+
+            match piece.role() {
+                board::Role::Pyramid => res.py |= m,
+                board::Role::Scarab => res.sc |= m,
+                board::Role::Anubis => res.an |= m,
+                board::Role::Sphinx => match piece.color() {
+                    board::Color::White => assert_eq!(m, MASK_W_SPHINX),
+                    board::Color::Red => assert_eq!(m, MASK_R_SPHINX),
+                },
+                board::Role::Pharaoh => res.ph |= m,
+            }
+
+            match piece.dir() {
+                Direction::NORTH => {
+                    res.n |= m;
+                    res.e |= m;
+                }
+                Direction::EAST => {
+                    res.n &= !m;
+                    res.e |= m;
+                }
+                Direction::SOUTH => {
+                    res.n &= !m;
+                    res.e &= !m;
+                }
+                Direction::WEST => {
+                    res.n |= m;
+                    res.e &= !m;
+                }
+                _ => panic!(),
+            }
+        }
+
+        res
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Move {

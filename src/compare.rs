@@ -25,21 +25,22 @@ pub struct Stats {
 }
 
 pub trait StatsSink {
-    fn report(&self, stats: Stats);
+    fn report(&self, stats: Stats, outcome: bb::GameOutcome);
 }
 
 impl<F> StatsSink for F
 where
-    F: Fn(Stats) -> (),
+    F: Fn(Stats, bb::GameOutcome) -> (),
 {
-    fn report(&self, stats: Stats) {
-        (*self)(stats);
+    fn report(&self, stats: Stats, outcome: bb::GameOutcome) {
+        (*self)(stats, outcome);
     }
 }
 
 fn compare_once<W, R>(
     white: W,
     red: R,
+    init: bb::Board,
     clock_config: FischerClockConfig,
     draw_thresh: usize,
     display: bool,
@@ -48,7 +49,7 @@ where
     W: Agent,
     R: Agent,
 {
-    let mut game = bb::Game::new(bb::Board::new_classic());
+    let mut game = bb::Game::new(init);
     let mut clock = FischerClock::start(clock_config);
 
     let w_desc = format!("{}", white);
@@ -152,6 +153,7 @@ where
 pub fn compare<P1, P2, S>(
     p1: P1,
     p2: P2,
+    init: bb::Board,
     num_games: usize,
     clock_config: FischerClockConfig,
     draw_thresh: usize,
@@ -189,19 +191,35 @@ where
     };
 
     (0..(num_games / 2)).for_each(|_| {
-        match compare_once(p1.clone(), p2.clone(), clock_config, draw_thresh, display) {
+        let outcome = compare_once(
+            p1.clone(),
+            p2.clone(),
+            init.clone(),
+            clock_config,
+            draw_thresh,
+            display,
+        );
+        match outcome {
             GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
             GameOutcome::WhiteWins => p1_win.fetch_add(1, Ordering::Relaxed),
             GameOutcome::RedWins => p1_lose.fetch_add(1, Ordering::Relaxed),
         };
-        stats_sink.report(capture_stats());
+        stats_sink.report(capture_stats(), outcome);
 
-        match compare_once(p2.clone(), p1.clone(), clock_config, draw_thresh, display) {
+        let outcome = compare_once(
+            p2.clone(),
+            p1.clone(),
+            init.clone(),
+            clock_config,
+            draw_thresh,
+            display,
+        );
+        match outcome {
             GameOutcome::Draw => p1_draw.fetch_add(1, Ordering::Relaxed),
             GameOutcome::WhiteWins => p1_lose.fetch_add(1, Ordering::Relaxed),
             GameOutcome::RedWins => p1_win.fetch_add(1, Ordering::Relaxed),
         };
-        stats_sink.report(capture_stats());
+        stats_sink.report(capture_stats(), outcome);
     });
 
     capture_stats()

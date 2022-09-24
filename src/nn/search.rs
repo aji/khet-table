@@ -146,7 +146,11 @@ impl Node {
     }
 
     fn expected_value(&self) -> f32 {
-        self.total_value / self.visits as f32
+        if self.visits == 0 {
+            0.0
+        } else {
+            self.total_value / self.visits as f32
+        }
     }
 
     fn implied_policy(&self) -> Vec<f32> {
@@ -325,7 +329,7 @@ impl Edge {
     fn puct(&self, params: &Params, parent_visits: usize, invert: bool) -> f32 {
         let n_tot = parent_visits as f32;
         let n = self.node.visits as f32;
-        let q = if invert { -1.0 } else { 1.0 } * self.node.total_value / n;
+        let q = if invert { -1.0 } else { 1.0 } * self.node.expected_value();
         let c = ((1.0 + n_tot + params.c_base) / params.c_base).ln() + params.c_init;
         let u = c * self.prior * n_tot.sqrt() / (1.0 + n);
         (q + 1.0) / 2.0 + u

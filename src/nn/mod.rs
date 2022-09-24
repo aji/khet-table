@@ -8,9 +8,9 @@ pub mod train;
 pub mod constants {
     use std::time::Duration;
 
-    pub const N_FILTERS: usize = 28;
-    pub const N_BLOCKS: usize = 3;
-    pub const N_VALUE_HIDDEN: usize = 32;
+    pub const N_FILTERS: usize = 36;
+    pub const N_BLOCKS: usize = 4;
+    pub const N_VALUE_HIDDEN: usize = 256;
 
     pub const N_MOVES: usize = 800;
     pub const N_ROWS: usize = 8;
@@ -45,7 +45,7 @@ pub mod constants {
     pub const GRAD_CLIP_L2_NORM: bool = true;
     pub const MOMENTUM: f32 = 0.7;
     pub const LR_SCHEDULE: [(usize, f32); 4] =
-        [(0, 2e-1), (100_000, 2e-2), (300_000, 2e-3), (500_000, 2e-4)];
+        [(0, 2e-1), (10_000, 2e-2), (100_000, 2e-3), (500_000, 2e-4)];
 
     pub const BUFFER_PRINT_INTERVAL: Duration = Duration::from_secs(1);
     pub const TRAIN_PRINT_INTERVAL: Duration = Duration::from_secs(1);

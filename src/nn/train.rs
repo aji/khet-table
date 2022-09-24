@@ -13,6 +13,17 @@ use nn::*;
 const NS_KHET: &'static str = "khet";
 const NS_OPT: &'static str = "opt";
 
+fn rand_initial_board() -> bb::Board {
+    match rand::random::<usize>() % 5 {
+        0 => bb::Board::new_classic(),
+        1 => bb::Board::new_dynasty(),
+        2 => bb::Board::new_imhotep(),
+        3 => bb::Board::new_mercury(),
+        4 => bb::Board::new_sophie(),
+        _ => panic!(),
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Example {
     board: bb::Board,
@@ -93,7 +104,7 @@ impl TrainEnv {
     }
 
     fn gen_self_play(&self, cost: usize) -> impl Iterator<Item = Example> {
-        let mut game = bb::Game::new(bb::Board::new_classic());
+        let mut game = bb::Game::new(rand_initial_board());
         let mut positions: Vec<(bb::Board, Vec<f32>)> = Vec::new();
 
         while game.outcome().is_none() && game.len_plys() < DRAW_THRESH {

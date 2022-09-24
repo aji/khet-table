@@ -50,7 +50,7 @@ impl fmt::Display for Location {
     }
 }
 
-struct AllLocations(u8);
+struct AllLocations(usize);
 
 impl Iterator for AllLocations {
     type Item = Location;
@@ -58,7 +58,7 @@ impl Iterator for AllLocations {
         if self.0 >= 80 {
             None
         } else {
-            let res = Location::new(Rank(self.0 % 10), File(self.0 / 10));
+            let res = Location::new(Rank::from_row(self.0 / 10), File::from_col(self.0 % 10));
             self.0 += 1;
             Some(res)
         }
@@ -75,6 +75,15 @@ const RANK_SYMS: &'static str = "87654321";
 impl Rank {
     pub fn all() -> impl Iterator<Item = Rank> {
         AllRanks(0)
+    }
+
+    pub fn from_row(r: usize) -> Rank {
+        assert!(r < 8);
+        Rank(r as u8)
+    }
+
+    pub fn to_row(&self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -121,6 +130,15 @@ const FILE_SYMS: &'static str = "abcdefghij";
 impl File {
     pub fn all() -> impl Iterator<Item = File> {
         AllFiles(0)
+    }
+
+    pub fn from_col(c: usize) -> File {
+        assert!(c < 10);
+        File(c as u8)
+    }
+
+    pub fn to_col(&self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -325,6 +343,16 @@ impl Piece {
                 Color::Red => Direction::SOUTH,
             },
         }
+    }
+
+    pub fn color(&self) -> Color {
+        self.color
+    }
+    pub fn role(&self) -> Role {
+        self.role
+    }
+    pub fn dir(&self) -> Direction {
+        self.dir
     }
 
     pub fn is_vulnerable(&self, incoming: Direction) -> bool {

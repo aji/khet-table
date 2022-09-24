@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use khet::{
-    agent,
+    agent, bb,
     clock::FischerClockConfig,
     compare::{compare, Stats},
 };
@@ -15,9 +15,16 @@ pub fn main() {
     let p1_desc = format!("{}", p1);
     let p2_desc = format!("{}", p2);
 
+    println!("{}", bb::Board::new_classic());
+    println!("{}", bb::Board::new_dynasty());
+    println!("{}", bb::Board::new_imhotep());
+    println!("{}", bb::Board::new_mercury());
+    println!("{}", bb::Board::new_sophie());
+
     compare(
         p1,
         p2,
+        bb::Board::new_dynasty(),
         100,
         FischerClockConfig::new(
             Duration::from_secs_f64(120.0),
@@ -25,7 +32,7 @@ pub fn main() {
             Duration::from_secs_f64(120.0),
         ),
         1000,
-        |stats: Stats| {
+        |stats: Stats, _| {
             let total_played = stats.p1_win + stats.p1_draw + stats.p1_lose;
             println!(
                 "\x1b[G\x1b[K({:3}/{:3}) P1={} P2={} ({:3}/{:3}/{:3}) P1 rel. elo {:+6.0}",
