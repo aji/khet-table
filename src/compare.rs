@@ -142,6 +142,10 @@ where
 
         game.add_move(&m);
 
+        if display {
+            println!("\n{}", game.latest());
+        }
+
         if let Some(outcome) = game.outcome() {
             return outcome;
         }

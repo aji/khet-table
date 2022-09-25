@@ -65,7 +65,7 @@ struct TrainEnv {
 impl TrainEnv {
     fn new() -> Self {
         let mut vars = ag::VariableEnvironment::new();
-        let model = KhetModel::new(&mut vars.namespace_mut(NS_KHET));
+        let model = KhetModel::new(&mut vars.namespace_mut(NS_KHET), None);
         let opt = ag::optimizers::MomentumSGD::new(
             0.0,
             MOMENTUM,
@@ -84,8 +84,16 @@ impl TrainEnv {
     }
 
     fn try_open(path: &'static str) -> Result<Self, ()> {
-        let mut vars = ag::VariableEnvironment::<Float>::load(path).map_err(|_| ())?;
-        let model = KhetModel::open(&vars.namespace(NS_KHET))?;
+        let load = ag::VariableEnvironment::<Float>::load(path).ok();
+        let mut vars = ag::VariableEnvironment::<Float>::new();
+        let model = load
+            .map(|env| {
+                KhetModel::new(
+                    &mut vars.namespace_mut(NS_KHET),
+                    Some(&env.namespace(NS_KHET)),
+                )
+            })
+            .unwrap_or_else(|| KhetModel::new(&mut vars.namespace_mut(NS_KHET), None));
         let opt = ag::optimizers::MomentumSGD::new(
             0.0,
             MOMENTUM,

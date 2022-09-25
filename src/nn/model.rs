@@ -148,14 +148,33 @@ impl<R: Rng> ArrayInit<R> {
     fn fc_weights(&self, out_features: usize, in_features: usize) -> nd::Array<Float, nd::IxDyn> {
         self.rng.glorot_uniform(&[out_features, in_features])
     }
-    fn fc_biases(&self, n_features: usize) -> nd::Array<Float, nd::Ix1> {
-        nd::Array::zeros([n_features])
+    fn fc_biases(&self, n_features: usize) -> nd::Array<Float, nd::IxDyn> {
+        nd::Array::zeros([n_features]).into_dyn()
     }
 }
 
+fn load_or<'env1, 'name1, 'env2, 'name2, S, F>(
+    ns: &mut ag::variable::VariableNamespaceMut<'env1, 'name1, Float>,
+    load: Option<&ag::variable::VariableNamespace<'env2, 'name2, Float>>,
+    name: S,
+    f: F,
+) -> VariableID
+where
+    S: Into<String>,
+    F: FnOnce() -> nd::Array<Float, nd::IxDyn>,
+{
+    let s_string = name.into();
+    let s = s_string.as_str();
+    ns.slot().name(s).set(
+        load.and_then(|ns| ns.get_array_by_name(s).map(|a| a.borrow().clone()))
+            .unwrap_or_else(f),
+    )
+}
+
 impl KhetModel {
-    pub fn new<'env, 'name>(
-        ns: &mut ag::variable::VariableNamespaceMut<'env, 'name, Float>,
+    pub fn new<'env1, 'name1, 'env2, 'name2>(
+        ns: &mut ag::variable::VariableNamespaceMut<'env1, 'name1, Float>,
+        load: Option<&ag::variable::VariableNamespace<'env2, 'name2, Float>>,
     ) -> KhetModel {
         let init = ArrayInit {
             rng: ArrayRng::default(),
@@ -163,152 +182,104 @@ impl KhetModel {
 
         KhetModel {
             encoder: Encoder {
-                conv: ns.slot().name("enc_conv").set(init.conv_filter(&[
-                    N_FILTERS,
-                    N_INPUT_PLANES,
-                    3,
-                    3,
-                ])),
-                conv_bias: ns
-                    .slot()
-                    .name("enc_conv_bias")
-                    .set(init.conv_bias(N_FILTERS)),
-                conv_bn_mean: ns
-                    .slot()
-                    .name("enc_conv_bn_mean")
-                    .set(nd::Array::zeros([N_FILTERS, 1, 1])),
-                conv_bn_stddev: ns
-                    .slot()
-                    .name("enc_conv_bn_stddev")
-                    .set(nd::Array::ones([N_FILTERS, 1, 1])),
-                conv_bn_gamma: ns
-                    .slot()
-                    .name("enc_conv_bn_gamma")
-                    .set(init.conv_bias(N_FILTERS)),
-                conv_bn_beta: ns
-                    .slot()
-                    .name("enc_conv_bn_beta")
-                    .set(init.conv_bias(N_FILTERS)),
+                conv: load_or(ns, load, "enc_conv", || {
+                    init.conv_filter(&[N_FILTERS, N_INPUT_PLANES, 3, 3])
+                }),
+                conv_bias: load_or(ns, load, "enc_conv_bias", || init.conv_bias(N_FILTERS)),
+                conv_bn_mean: load_or(ns, load, "enc_conv_bn_mean", || {
+                    nd::Array::zeros([N_FILTERS, 1, 1]).into_dyn()
+                }),
+                conv_bn_stddev: load_or(ns, load, "enc_conv_bn_stddev", || {
+                    nd::Array::ones([N_FILTERS, 1, 1]).into_dyn()
+                }),
+                conv_bn_gamma: load_or(ns, load, "enc_conv_bn_gamma", || init.conv_bias(N_FILTERS)),
+                conv_bn_beta: load_or(ns, load, "enc_conv_bn_beta", || init.conv_bias(N_FILTERS)),
             },
 
             res_blocks: (0..N_BLOCKS)
                 .map(|i| ResBlock {
-                    conv1: ns
-                        .slot()
-                        .name(format!("res{}_conv1", i))
-                        .set(init.conv_filter(&[N_FILTERS, N_FILTERS, 3, 3])),
-                    conv1_bias: ns
-                        .slot()
-                        .name(format!("res{}_conv1_bias", i))
-                        .set(init.conv_bias(N_FILTERS)),
-                    conv1_bn_mean: ns
-                        .slot()
-                        .name(format!("res{}_conv1_bn_mean", i))
-                        .set(nd::Array::zeros([N_FILTERS, 1, 1])),
-                    conv1_bn_stddev: ns
-                        .slot()
-                        .name(format!("res{}_conv1_bn_stddev", i))
-                        .set(nd::Array::ones([N_FILTERS, 1, 1])),
-                    conv1_bn_gamma: ns
-                        .slot()
-                        .name(format!("res{}_conv1_bn_gamma", i))
-                        .set(init.conv_bias(N_FILTERS)),
-                    conv1_bn_beta: ns
-                        .slot()
-                        .name(format!("res{}_conv1_bn_beta", i))
-                        .set(init.conv_bias(N_FILTERS)),
-                    conv2: ns
-                        .slot()
-                        .name(format!("res{}_conv2", i))
-                        .set(init.conv_filter(&[N_FILTERS, N_FILTERS, 3, 3])),
-                    conv2_bias: ns
-                        .slot()
-                        .name(format!("res{}_conv2_bias", i))
-                        .set(init.conv_bias(N_FILTERS)),
-                    conv2_bn_mean: ns
-                        .slot()
-                        .name(format!("res{}_conv2_bn_mean", i))
-                        .set(nd::Array::zeros([N_FILTERS, 1, 1])),
-                    conv2_bn_stddev: ns
-                        .slot()
-                        .name(format!("res{}_conv2_bn_stddev", i))
-                        .set(nd::Array::ones([N_FILTERS, 1, 1])),
-                    conv2_bn_gamma: ns
-                        .slot()
-                        .name(format!("res{}_conv2_bn_gamma", i))
-                        .set(init.conv_bias(N_FILTERS)),
-                    conv2_bn_beta: ns
-                        .slot()
-                        .name(format!("res{}_conv2_bn_beta", i))
-                        .set(init.conv_bias(N_FILTERS)),
+                    conv1: load_or(ns, load, format!("res{}_conv1", i), || {
+                        init.conv_filter(&[N_FILTERS, N_FILTERS, 3, 3])
+                    }),
+                    conv1_bias: load_or(ns, load, format!("res{}_conv1_bias", i), || {
+                        init.conv_bias(N_FILTERS)
+                    }),
+                    conv1_bn_mean: load_or(ns, load, format!("res{}_conv1_bn_mean", i), || {
+                        nd::Array::zeros([N_FILTERS, 1, 1]).into_dyn()
+                    }),
+                    conv1_bn_stddev: load_or(ns, load, format!("res{}_conv1_bn_stddev", i), || {
+                        nd::Array::ones([N_FILTERS, 1, 1]).into_dyn()
+                    }),
+                    conv1_bn_gamma: load_or(ns, load, format!("res{}_conv1_bn_gamma", i), || {
+                        init.conv_bias(N_FILTERS)
+                    }),
+                    conv1_bn_beta: load_or(ns, load, format!("res{}_conv1_bn_beta", i), || {
+                        init.conv_bias(N_FILTERS)
+                    }),
+                    conv2: load_or(ns, load, format!("res{}_conv2", i), || {
+                        init.conv_filter(&[N_FILTERS, N_FILTERS, 3, 3])
+                    }),
+                    conv2_bias: load_or(ns, load, format!("res{}_conv2_bias", i), || {
+                        init.conv_bias(N_FILTERS)
+                    }),
+                    conv2_bn_mean: load_or(ns, load, format!("res{}_conv2_bn_mean", i), || {
+                        nd::Array::zeros([N_FILTERS, 1, 1]).into_dyn()
+                    }),
+                    conv2_bn_stddev: load_or(ns, load, format!("res{}_conv2_bn_stddev", i), || {
+                        nd::Array::ones([N_FILTERS, 1, 1]).into_dyn()
+                    }),
+                    conv2_bn_gamma: load_or(ns, load, format!("res{}_conv2_bn_gamma", i), || {
+                        init.conv_bias(N_FILTERS)
+                    }),
+                    conv2_bn_beta: load_or(ns, load, format!("res{}_conv2_bn_beta", i), || {
+                        init.conv_bias(N_FILTERS)
+                    }),
                 })
                 .collect(),
 
             policy_head: PolicyHead {
-                conv: ns
-                    .slot()
-                    .name("policy_conv")
-                    .set(init.conv_filter(&[2, N_FILTERS, 1, 1])),
-                conv_bias: ns.slot().name("policy_conv_bias").set(init.conv_bias(2)),
-                conv_bn_mean: ns
-                    .slot()
-                    .name("policy_conv_bn_mean")
-                    .set(nd::Array::zeros([2, 1, 1])),
-                conv_bn_stddev: ns
-                    .slot()
-                    .name("policy_conv_bn_stddev")
-                    .set(nd::Array::ones([2, 1, 1])),
-                conv_bn_gamma: ns
-                    .slot()
-                    .name("policy_conv_bn_gamma")
-                    .set(init.conv_bias(2)),
-                conv_bn_beta: ns.slot().name("policy_conv_bn_beta").set(init.conv_bias(2)),
-                fc: ns
-                    .slot()
-                    .name("policy_fc")
-                    .set(init.fc_weights(N_MOVES, 2 * N_ROWS * N_COLS)),
-                fc_bias: ns
-                    .slot()
-                    .name("policy_fc_bias")
-                    .set(init.fc_biases(N_MOVES)),
+                conv: load_or(ns, load, "policy_conv", || {
+                    init.conv_filter(&[2, N_FILTERS, 1, 1])
+                }),
+                conv_bias: load_or(ns, load, "policy_conv_bias", || init.conv_bias(2)),
+                conv_bn_mean: load_or(ns, load, "policy_conv_bn_mean", || {
+                    nd::Array::zeros([2, 1, 1]).into_dyn()
+                }),
+                conv_bn_stddev: load_or(ns, load, "policy_conv_bn_stddev", || {
+                    nd::Array::ones([2, 1, 1]).into_dyn()
+                }),
+                conv_bn_gamma: load_or(ns, load, "policy_conv_bn_gamma", || init.conv_bias(2)),
+                conv_bn_beta: load_or(ns, load, "policy_conv_bn_beta", || init.conv_bias(2)),
+                fc: load_or(ns, load, "policy_fc", || {
+                    init.fc_weights(N_MOVES, 2 * N_ROWS * N_COLS)
+                }),
+                fc_bias: load_or(ns, load, "policy_fc_bias", || init.fc_biases(N_MOVES)),
             },
 
             value_head: ValueHead {
-                conv: ns
-                    .slot()
-                    .name("value_conv")
-                    .set(init.conv_filter(&[1, N_FILTERS, 1, 1])),
-                conv_bias: ns.slot().name("value_conv_bias").set(init.conv_bias(1)),
-                conv_bn_mean: ns
-                    .slot()
-                    .name("value_conv_bn_mean")
-                    .set(nd::Array::zeros([1, 1, 1])),
-                conv_bn_stddev: ns
-                    .slot()
-                    .name("value_conv_bn_stddev")
-                    .set(nd::Array::ones([1, 1, 1])),
-                conv_bn_gamma: ns.slot().name("value_conv_bn_gamma").set(init.conv_bias(1)),
-                conv_bn_beta: ns.slot().name("value_conv_bn_beta").set(init.conv_bias(1)),
-                fc1: ns
-                    .slot()
-                    .name("value_fc1")
-                    .set(init.fc_weights(N_VALUE_HIDDEN, N_ROWS * N_COLS)),
-                fc1_bias: ns
-                    .slot()
-                    .name("value_fc1_bias")
-                    .set(init.fc_biases(N_VALUE_HIDDEN)),
-                fc2: ns
-                    .slot()
-                    .name("value_fc2")
-                    .set(nd::Array::zeros([1, N_VALUE_HIDDEN])),
+                conv: load_or(ns, load, "value_conv", || {
+                    init.conv_filter(&[1, N_FILTERS, 1, 1])
+                }),
+                conv_bias: load_or(ns, load, "value_conv_bias", || init.conv_bias(1)),
+                conv_bn_mean: load_or(ns, load, "value_conv_bn_mean", || {
+                    nd::Array::zeros([1, 1, 1]).into_dyn()
+                }),
+                conv_bn_stddev: load_or(ns, load, "value_conv_bn_stddev", || {
+                    nd::Array::ones([1, 1, 1]).into_dyn()
+                }),
+                conv_bn_gamma: load_or(ns, load, "value_conv_bn_gamma", || init.conv_bias(1)),
+                conv_bn_beta: load_or(ns, load, "value_conv_bn_beta", || init.conv_bias(1)),
+                fc1: load_or(ns, load, "value_fc1", || {
+                    init.fc_weights(N_VALUE_HIDDEN, N_ROWS * N_COLS)
+                }),
+                fc1_bias: load_or(ns, load, "value_fc1_bias", || {
+                    init.fc_biases(N_VALUE_HIDDEN)
+                }),
+                fc2: load_or(ns, load, "value_fc2", || {
+                    nd::Array::zeros([1, N_VALUE_HIDDEN]).into_dyn()
+                }),
             },
         }
-    }
-
-    pub fn open<'env, 'name>(
-        _ns: &ag::variable::VariableNamespace<'env, 'name, Float>,
-    ) -> Result<KhetModel, ()> {
-        todo!()
     }
 
     // in [batch, N_INPUT_PLANES, N_ROWS, N_COLS]
