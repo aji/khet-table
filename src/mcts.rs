@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use bumpalo::{collections::Vec, Bump};
+use rayon::prelude::*;
 
 use crate::bb;
 
@@ -299,7 +300,7 @@ fn gen_children_in<'alo, R: Rollout>(
 ) -> Vec<'alo, Node<'alo>> {
     let mut children = Vec::with_capacity_in(moves.len(), bump);
     let rollouts: std::vec::Vec<(bb::Board, Score)> = moves
-        .iter()
+        .into_par_iter()
         .map(|m| {
             let next = game.peek_move(m);
             let initial_score = calc_initial_score(game, &next, rollout);

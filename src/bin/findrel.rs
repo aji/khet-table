@@ -8,7 +8,7 @@ use khet::{bb, mcts, nn};
 const FINDREL_TXT: &'static str = "findrel.txt";
 const SCORE_MOMENTUM: f64 = 0.7;
 const HANDICAP_SPEED: f64 = 100.0;
-const NN_EVALS: usize = 10;
+const NN_EVALS: usize = 600;
 const DRAW_THRESH: usize = 1000;
 
 #[derive(Debug)]
@@ -65,14 +65,16 @@ fn run_one_test(
                 &game,
                 &mcts::Resources::new().limit_iters((NN_EVALS as f64 * handicap) as usize),
                 1.0,
-                &mcts::traditional_rollout,
+                &mcts::smart_rollout,
             );
             println!(
-                "MCTS EVAL: {:?} {:+.4} -> {:+.4} (delta {:+.4})",
+                "MCTS EVAL: {:?} {:+.4} -> {:+.4} (delta {:+.4}) n={} d={}",
                 start.elapsed(),
                 m_stats.root_value,
                 m_stats.top_move_value,
-                m_stats.top_move_value - m_stats.root_value
+                m_stats.top_move_value - m_stats.root_value,
+                m_stats.tree_size,
+                m_stats.tree_max_depth
             );
             m
         } else {
@@ -90,11 +92,14 @@ fn run_one_test(
                 &nn::search::Params::default_eval(),
             );
             println!(
-                "NN EVAL: {:?} {:+.4} -> {:+.4} (delta {:+.4})",
+                "NN EVAL: {:?} {:+.4} -> {:+.4} (delta {:+.4}) d={}..{} D={}",
                 start.elapsed(),
                 out.root_value,
                 out.value,
-                out.value - out.root_value
+                out.value - out.root_value,
+                out.stats.tree_min_height,
+                out.stats.tree_max_height,
+                out.stats.pv_depth
             );
             out.m
         };
