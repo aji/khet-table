@@ -8,6 +8,9 @@ pub mod train;
 pub mod constants {
     use std::time::Duration;
 
+    pub const NS_KHET: &'static str = "khet";
+    pub const NS_OPT: &'static str = "opt";
+
     pub const N_FILTERS: usize = 36;
     pub const N_BLOCKS: usize = 4;
     pub const N_VALUE_HIDDEN: usize = 256;

@@ -45,7 +45,7 @@ fn main() {
     )
     .unwrap();
 
-    nn::train::run_training(None, move |env, model, stats| {
+    nn::train::run_training("weights.json", move |env, model, stats| {
         let start_time = train_start.elapsed();
 
         let p1 = NNAgent::new(env, model, agent::StandardMctsTimeManagement::new(25));

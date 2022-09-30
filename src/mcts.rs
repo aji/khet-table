@@ -10,6 +10,7 @@ pub struct Resources {
     tree_size: usize,
     bytes: usize,
     top_confidence: f64,
+    iters: usize,
 }
 
 impl Resources {
@@ -19,6 +20,7 @@ impl Resources {
             tree_size: usize::MAX,
             bytes: usize::MAX,
             top_confidence: 1.0,
+            iters: usize::MAX,
         }
     }
 
@@ -38,9 +40,16 @@ impl Resources {
         self.top_confidence = top_confidence;
         self
     }
+    pub fn limit_iters(mut self, iters: usize) -> Resources {
+        self.iters = iters;
+        self
+    }
 
     fn is_unlimited(&self) -> bool {
-        self.time == Duration::MAX && self.tree_size == usize::MAX && self.bytes == usize::MAX
+        self.time == Duration::MAX
+            && self.tree_size == usize::MAX
+            && self.bytes == usize::MAX
+            && self.iters == usize::MAX
     }
 
     fn exceeds(&self, other: &Resources) -> bool {
@@ -48,6 +57,7 @@ impl Resources {
             || self.tree_size > other.tree_size
             || self.bytes > other.bytes
             || self.top_confidence > other.top_confidence
+            || self.iters > other.iters
     }
 }
 
@@ -155,6 +165,7 @@ pub fn search<C: Context, R: Rollout>(
     let mut game = initial_game.clone();
     let mut top_move = 0;
     let mut top_confidence = 0.0;
+    let mut iters = 0;
     let root_moves = game.latest().movegen().to_vec();
 
     let mut stats = Stats {
@@ -185,6 +196,7 @@ pub fn search<C: Context, R: Rollout>(
             tree_size: root.score.visits,
             bytes: bump.allocated_bytes(),
             top_confidence,
+            iters,
         };
         if used.exceeds(budget) {
             break;
@@ -214,6 +226,8 @@ pub fn search<C: Context, R: Rollout>(
         if let Signal::Abort = context.defer(&stats) {
             break;
         }
+
+        iters += 1;
     }
 
     (root_moves[top_move], stats)

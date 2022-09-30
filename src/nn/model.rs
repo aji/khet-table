@@ -416,3 +416,32 @@ impl KhetModel {
         (policy, value)
     }
 }
+
+pub fn try_load<P: AsRef<std::path::Path>>(
+    path: P,
+) -> (
+    KhetModel,
+    ag::VariableEnvironment<'static, Float>,
+    Result<(), ()>,
+) {
+    let load = ag::VariableEnvironment::<Float>::load(path).ok();
+    let mut vars = ag::VariableEnvironment::<Float>::new();
+    let (model, res) = load
+        .map(|env| {
+            (
+                KhetModel::new(
+                    &mut vars.namespace_mut(NS_KHET),
+                    Some(&env.namespace(NS_KHET)),
+                ),
+                Ok(()),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                KhetModel::new(&mut vars.namespace_mut(NS_KHET), None),
+                Err(()),
+            )
+        });
+
+    (model, vars, res)
+}

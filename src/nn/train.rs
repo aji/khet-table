@@ -10,9 +10,6 @@ use autograd::{self as ag, ndarray as nd, tensor_ops as T};
 
 use nn::*;
 
-const NS_KHET: &'static str = "khet";
-const NS_OPT: &'static str = "opt";
-
 fn rand_initial_board() -> bb::Board {
     match rand::random::<usize>() % 5 {
         0 => bb::Board::new_classic(),
@@ -63,9 +60,7 @@ struct TrainEnv {
 }
 
 impl TrainEnv {
-    fn new() -> Self {
-        let mut vars = ag::VariableEnvironment::new();
-        let model = KhetModel::new(&mut vars.namespace_mut(NS_KHET), None);
+    fn new(model: KhetModel, mut vars: ag::VariableEnvironment<'static, Float>) -> Self {
         let opt = ag::optimizers::MomentumSGD::new(
             0.0,
             MOMENTUM,
@@ -81,34 +76,6 @@ impl TrainEnv {
             last_train_loss: f32::INFINITY,
             last_test_loss: f32::INFINITY,
         }
-    }
-
-    fn try_open(path: &'static str) -> Result<Self, ()> {
-        let load = ag::VariableEnvironment::<Float>::load(path).ok();
-        let mut vars = ag::VariableEnvironment::<Float>::new();
-        let model = load
-            .map(|env| {
-                KhetModel::new(
-                    &mut vars.namespace_mut(NS_KHET),
-                    Some(&env.namespace(NS_KHET)),
-                )
-            })
-            .unwrap_or_else(|| KhetModel::new(&mut vars.namespace_mut(NS_KHET), None));
-        let opt = ag::optimizers::MomentumSGD::new(
-            0.0,
-            MOMENTUM,
-            vars.namespace(NS_KHET).current_var_ids().into_iter(),
-            &mut vars,
-            NS_OPT,
-        );
-        Ok(Self {
-            vars,
-            model,
-            opt: Arc::new(Mutex::new(opt)),
-            num_training_iters: 0,
-            last_train_loss: f32::INFINITY,
-            last_test_loss: f32::INFINITY,
-        })
     }
 
     fn gen_self_play(&self, cost: usize) -> impl Iterator<Item = Example> {
@@ -445,18 +412,22 @@ pub struct TrainStats {
     pub buf_all_time_avg_cost: usize,
 }
 
-pub fn run_training<F>(open: Option<&'static str>, f: F)
+pub fn run_training<F>(open: &'static str, f: F)
 where
     F: FnMut(&ag::VariableEnvironment<'static, Float>, &KhetModel, &TrainStats) -> ()
         + Send
         + 'static,
 {
     let ctx = Arc::new(TrainContext {
-        env: Mutex::new(
-            open.map(|p| TrainEnv::try_open(p).ok())
-                .flatten()
-                .unwrap_or_else(|| TrainEnv::new()),
-        ),
+        env: Mutex::new({
+            let (model, vars, res) = nn::model::try_load(open);
+            if res.is_ok() {
+                println!("successfully loaded {}", open);
+            } else {
+                println!("failed to load {}; using new model", open);
+            }
+            TrainEnv::new(model, vars)
+        }),
         buf: Mutex::new(Buffer {
             data: Vec::new(),
             start: 0,

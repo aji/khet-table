@@ -64,6 +64,7 @@ pub struct Output {
     pub m: bb::Move,
     pub policy: Vec<f32>,
     pub value: f32,
+    pub root_value: f32,
     pub stats: Stats,
 }
 
@@ -108,6 +109,7 @@ pub fn run<C: Context>(
         m: bb::Move::nn_ith(max_child.index),
         policy: root.implied_policy(),
         value: max_child.node.expected_value(),
+        root_value: root.total_value / root.visits as f32,
         stats,
     }
 }
