@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{bb, nn};
-use ag::{prelude::*, variable::NamespaceTrait};
+use ag::prelude::*;
 use autograd::{self as ag, ndarray as nd, tensor_ops as T};
 
 use nn::*;
@@ -336,7 +336,7 @@ impl TrainContext {
 
     fn add_examples<I: Iterator<Item = Example>>(&self, it: I) {
         let _ = {
-            let mut buf = &mut *self.buf.lock().unwrap();
+            let buf = &mut *self.buf.lock().unwrap();
 
             for (i, ex) in it.enumerate() {
                 buf.total_cost += ex.cost;

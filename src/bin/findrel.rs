@@ -8,8 +8,8 @@ use khet::{bb, mcts, nn};
 const FINDREL_TXT: &'static str = "findrel.txt";
 const SCORE_MOMENTUM: f64 = 0.7;
 const HANDICAP_SPEED: f64 = 100.0;
-const NN_EVALS: usize = 600;
-const DRAW_THRESH: usize = 1000;
+const NN_EVALS: usize = 1800;
+const DRAW_THRESH: usize = 60;
 
 #[derive(Debug)]
 struct TestConfig {
@@ -131,7 +131,7 @@ fn run_one_test(
 pub fn main() {
     let start = Instant::now();
     let mut cur_score = 0.5;
-    let mut handicap = 100.0;
+    let mut handicap = 1.0;
     let mut cf = TestConfig::new();
 
     write!(

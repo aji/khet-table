@@ -39,6 +39,9 @@ const DIR_E: usize = 1;
 const DIR_S: usize = 2;
 const DIR_W: usize = 3;
 
+const RANKS: &'static str = "87654321";
+const FILES: &'static str = "abcdefghij";
+
 fn swap_bits(x: u128, s: u128, d: u128) -> u128 {
     let dx = if x & s == 0 { 0 } else { d };
     let sx = if x & d == 0 { 0 } else { s };
@@ -468,10 +471,10 @@ impl Board {
 
             laser = unsafe {
                 match dir {
-                    DIR_N => laser.unchecked_shl(SHL_N as u128) & MASK_BOARD,
-                    DIR_E => laser.unchecked_shr(SHR_E as u128) & MASK_BOARD,
-                    DIR_S => laser.unchecked_shr(SHR_S as u128) & MASK_BOARD,
-                    DIR_W => laser.unchecked_shl(SHL_W as u128) & MASK_BOARD,
+                    DIR_N => laser.unchecked_shl(SHL_N as u32) & MASK_BOARD,
+                    DIR_E => laser.unchecked_shr(SHR_E as u32) & MASK_BOARD,
+                    DIR_S => laser.unchecked_shr(SHR_S as u32) & MASK_BOARD,
+                    DIR_W => laser.unchecked_shl(SHL_W as u32) & MASK_BOARD,
                     _ => unreachable!(),
                 }
             };
@@ -777,6 +780,43 @@ impl Move {
     }
 }
 
+impl fmt::Display for Move {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = self.s.ilog2();
+        let d = self.d.ilog2();
+
+        let r = 7 - s / 16;
+        let c = 9 - s % 16;
+        let dr = (7 - d / 16) as i32 - r as i32;
+        let dc = (9 - d % 16) as i32 - c as i32;
+
+        let dir = match (dr, dc) {
+            (0, 0) => match self.dd {
+                1 => "CW",
+                3 => "CCW",
+                _ => unreachable!(),
+            },
+            (-1, 0) => "N",
+            (0, 1) => "E",
+            (1, 0) => "S",
+            (0, -1) => "W",
+            (-1, 1) => "NE",
+            (1, 1) => "SE",
+            (1, -1) => "SW",
+            (-1, -1) => "NW",
+            _ => unreachable!(),
+        };
+
+        write!(
+            f,
+            "{}{} {}",
+            FILES.chars().nth(c as usize).unwrap(),
+            RANKS.chars().nth(r as usize).unwrap(),
+            dir
+        )
+    }
+}
+
 impl fmt::Debug for Move {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Move")
@@ -1004,6 +1044,10 @@ impl Game {
     pub fn add_move(&mut self, m: &Move) -> &Board {
         self.add_board(self.peek_move(m));
         self.latest()
+    }
+
+    pub fn undo(&mut self, n: isize) -> () {
+        self.truncate((self.history.len() as isize - n).max(1) as usize);
     }
 
     pub fn outcome(&self) -> Option<GameOutcome> {

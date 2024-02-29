@@ -1,5 +1,6 @@
 #![feature(test)]
 #![feature(unchecked_math)]
+#![feature(unchecked_shifts)]
 
 extern crate autograd;
 extern crate bumpalo;
