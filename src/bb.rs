@@ -2,8 +2,7 @@ use autograd as ag;
 use std::fmt;
 
 use crate::{
-    bexpr,
-    board::{self, Direction},
+    bexpr, board as B,
     nn::{self, N_INPUT_PLANES},
 };
 
@@ -159,6 +158,21 @@ impl Iterator for BitsOf {
         self.0 &= !m;
         Some(m)
     }
+}
+
+fn rc_to(r: usize, c: usize) -> u128 {
+    1u128 << ((7 - r) * 16 + (9 - c))
+}
+fn to_rc(m: u128) -> (usize, usize) {
+    let i = m.ilog2() as usize;
+    (7 - i / 16, 9 - i % 16)
+}
+fn loc_to(loc: &B::Location) -> u128 {
+    rc_to(loc.rank().to_row(), loc.file().to_col())
+}
+fn to_loc(m: u128) -> B::Location {
+    let (r, c) = to_rc(m);
+    B::Location::new(B::Rank::from_row(r), B::File::from_col(c))
 }
 
 struct BitboardPretty(u128);
@@ -600,7 +614,7 @@ impl fmt::Display for Board {
             write!(f, "{}", 8 - row)?;
 
             for col in 0..10 {
-                let m = 1u128 << ((7 - row) * 16 + (9 - col));
+                let m = rc_to(row, col);
 
                 let x =
                     0 | (if m & MASK_W_SPHINX != 0 {
@@ -681,12 +695,12 @@ impl PartialEq for Board {
 
 impl Eq for Board {}
 
-impl From<board::Board> for Board {
-    fn from(b: board::Board) -> Self {
+impl From<B::Board> for Board {
+    fn from(b: B::Board) -> Self {
         let mut res = Board::new_empty();
 
-        for loc in board::Location::all() {
-            let m = 1u128 << ((7 - loc.rank().to_row()) * 16 + (9 - loc.file().to_col()));
+        for loc in B::Location::all() {
+            let m = loc_to(&loc);
 
             let piece = match b[loc] {
                 Some(x) => x,
@@ -694,40 +708,79 @@ impl From<board::Board> for Board {
             };
 
             match piece.color() {
-                board::Color::White => res.w |= m,
-                board::Color::Red => res.r |= m,
+                B::Color::White => res.w |= m,
+                B::Color::Red => res.r |= m,
             }
 
             match piece.role() {
-                board::Role::Pyramid => res.py |= m,
-                board::Role::Scarab => res.sc |= m,
-                board::Role::Anubis => res.an |= m,
-                board::Role::Sphinx => match piece.color() {
-                    board::Color::White => assert_eq!(m, MASK_W_SPHINX),
-                    board::Color::Red => assert_eq!(m, MASK_R_SPHINX),
+                B::Role::Pyramid => res.py |= m,
+                B::Role::Scarab => res.sc |= m,
+                B::Role::Anubis => res.an |= m,
+                B::Role::Sphinx => match piece.color() {
+                    B::Color::White => assert_eq!(m, MASK_W_SPHINX),
+                    B::Color::Red => assert_eq!(m, MASK_R_SPHINX),
                 },
-                board::Role::Pharaoh => res.ph |= m,
+                B::Role::Pharaoh => res.ph |= m,
             }
 
             match piece.dir() {
-                Direction::NORTH => {
+                B::Direction::NORTH => {
                     res.n |= m;
                     res.e |= m;
                 }
-                Direction::EAST => {
+                B::Direction::EAST => {
                     res.n &= !m;
                     res.e |= m;
                 }
-                Direction::SOUTH => {
+                B::Direction::SOUTH => {
                     res.n &= !m;
                     res.e &= !m;
                 }
-                Direction::WEST => {
+                B::Direction::WEST => {
                     res.n |= m;
                     res.e &= !m;
                 }
                 _ => panic!(),
             }
+        }
+
+        res
+    }
+}
+
+impl Into<B::Board> for Board {
+    fn into(self) -> B::Board {
+        let mut res = B::Board::empty();
+
+        for loc in B::Location::all() {
+            let m = 1u128 << ((7 - loc.rank().to_row()) * 16 + (9 - loc.file().to_col()));
+
+            let color = match (self.w & m != 0, self.r & m != 0) {
+                (true, false) => B::Color::White,
+                (false, true) => B::Color::Red,
+                _ => continue,
+            };
+
+            let dir = match (self.n & m != 0, self.e & m != 0) {
+                (true, true) => B::Direction::NORTH,
+                (false, true) => B::Direction::EAST,
+                (false, false) => B::Direction::SOUTH,
+                (true, false) => B::Direction::WEST,
+            };
+
+            res[loc] = if self.py & m != 0 {
+                Some(B::Piece::pyramid(color, self.n & m != 0, self.e & m != 0))
+            } else if self.sc & m != 0 {
+                Some(B::Piece::scarab(color, self.n & m == self.e & m))
+            } else if self.an & m != 0 {
+                Some(B::Piece::anubis(color, dir))
+            } else if self.ph & m != 0 {
+                Some(B::Piece::pharaoh(color))
+            } else if (MASK_W_SPHINX | MASK_R_SPHINX) & m != 0 {
+                Some(B::Piece::sphinx(color, self.n & m == self.e & m))
+            } else {
+                None
+            };
         }
 
         res
@@ -761,7 +814,7 @@ impl Move {
     pub fn nn_ith(i: usize) -> Move {
         let (j, x) = (i / 80, i % 80);
         let (r, c) = (x / 10, x % 10);
-        let s = 1u128 << ((7 - r) * 16 + (9 - c));
+        let s = rc_to(r, c);
         Move::ith(s, j)
     }
 
@@ -777,6 +830,45 @@ impl Move {
 
     fn rot(s: u128, dd: usize) -> Move {
         Move { s, d: s, dd }
+    }
+}
+
+impl From<B::Move> for Move {
+    fn from(m: B::Move) -> Self {
+        let s = loc_to(&m.start());
+        let d = loc_to(&m.end());
+        let dd = m.rotation().0 as usize;
+        Move { s, d, dd }
+    }
+}
+
+impl Into<B::Move> for Move {
+    fn into(self) -> B::Move {
+        let (rs, cs) = to_rc(self.s);
+        let (rd, cd) = to_rc(self.d);
+
+        let dr = rd as i32 - rs as i32;
+        let dc = cd as i32 - cs as i32;
+
+        let loc = to_loc(self.s);
+        let op = match (dr, dc) {
+            (0, 0) => match self.dd {
+                1 => B::Op::CW,
+                3 => B::Op::CCW,
+                _ => unreachable!(),
+            },
+            (-1, 0) => B::Op::N,
+            (0, 1) => B::Op::E,
+            (1, 0) => B::Op::S,
+            (0, -1) => B::Op::W,
+            (-1, 1) => B::Op::NE,
+            (1, 1) => B::Op::SE,
+            (1, -1) => B::Op::SW,
+            (-1, -1) => B::Op::NW,
+            _ => unreachable!(),
+        };
+
+        B::Move::new(loc, op)
     }
 }
 

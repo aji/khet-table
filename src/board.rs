@@ -17,8 +17,16 @@ impl Location {
         Location { rank, file }
     }
 
+    pub fn from_rc(row: usize, col: usize) -> Location {
+        Location::new(Rank::from_row(row), File::from_col(col))
+    }
+
     pub fn all() -> impl Iterator<Item = Location> {
         AllLocations(0)
+    }
+
+    pub fn to_rc(&self) -> (usize, usize) {
+        (self.rank.to_row(), self.file.to_col())
     }
 
     fn move_by(&self, drow: i8, dcol: i8) -> Location {
@@ -216,7 +224,7 @@ impl ops::Sub<Direction> for Direction {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct DirDelta(u8);
+pub struct DirDelta(pub u8);
 
 impl DirDelta {
     pub const ZERO: DirDelta = DirDelta(0);
@@ -414,6 +422,14 @@ pub enum Op {
 }
 
 impl Move {
+    pub fn new(loc: Location, op: Op) -> Move {
+        Move { loc, op }
+    }
+
+    pub fn op(&self) -> Op {
+        self.op
+    }
+
     pub fn start(&self) -> Location {
         self.loc
     }

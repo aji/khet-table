@@ -20,3 +20,4 @@ pub mod clock;
 pub mod compare;
 pub mod mcts;
 pub mod nn;
+pub mod ui;
