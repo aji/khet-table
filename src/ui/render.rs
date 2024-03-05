@@ -1,8 +1,13 @@
 use std::f32::consts::TAU;
 
 use ggez::{
+    context::Has,
     glam,
-    graphics::{Canvas, Color, DrawMode, DrawParam, LineCap, LineJoin, Mesh, Rect, StrokeOptions},
+    graphics::{
+        Canvas, Color, DrawMode, DrawParam, GraphicsContext, LineCap, LineJoin, Mesh, Rect,
+        StrokeOptions,
+    },
+    Context,
 };
 
 use crate::{bb, board as B};
@@ -86,8 +91,11 @@ impl Renderer {
         }
     }
 
-    pub fn setup(&self, dest: Rect) -> RendererInstance {
-        let space = ((dest.w - 2.0 * D_BOARD_PAD) / 10.0).min((dest.h - 2.0 * D_BOARD_PAD) / 8.0);
+    pub fn setup(&self, ctx: &Context, dest: Rect) -> RendererInstance {
+        let (_, h) = Has::<GraphicsContext>::retrieve(ctx).drawable_size();
+        let f = h / D_BASE;
+        let space =
+            ((dest.w - 2.0 * f * D_BOARD_PAD) / 10.0).min((dest.h - 2.0 * f * D_BOARD_PAD) / 8.0);
         let bw = space * 10.0;
         let bh = space * 8.0;
         let sx = dest.x + (dest.w - bw + space) / 2.0;

@@ -195,18 +195,19 @@ impl CommandUI {
         &self,
         ctx: &mut Context,
         canvas: &mut Canvas,
-        f: F,
+        cb: F,
     ) {
         let (w, h) = Has::<GraphicsContext>::retrieve(ctx).drawable_size();
+        let f: f32 = h / D_BASE;
         let mut i = 0;
-        let mut y = D_PALETTE_MARGIN + D_PALETTE_PAD;
+        let mut y = f * (D_PALETTE_MARGIN + D_PALETTE_PAD);
         let mut texts: Vec<Text> = Vec::new();
         while y < h {
-            let mut text = match f(i) {
+            let mut text = match cb(i) {
                 Some(draw) => draw.to_ggez(),
                 None => break,
             };
-            text.set_font(S_FONT).set_scale(D_COMMAND_TEXT_SCALE);
+            text.set_font(S_FONT).set_scale(f * D_COMMAND_TEXT_SCALE);
             y += text.measure(ctx).unwrap().y;
             i += 1;
             texts.push(text);
@@ -216,21 +217,21 @@ impl CommandUI {
                 ctx,
                 DrawMode::fill(),
                 Rect::new(
-                    D_PALETTE_MARGIN,
-                    D_PALETTE_MARGIN,
-                    w - 2.0 * D_PALETTE_MARGIN,
-                    y + D_PALETTE_PAD,
+                    f * D_PALETTE_MARGIN,
+                    f * D_PALETTE_MARGIN,
+                    w - 2.0 * f * D_PALETTE_MARGIN,
+                    y + f * D_PALETTE_PAD,
                 ),
                 C_PALETTE_BG,
             )
             .unwrap(),
             DrawParam::default(),
         );
-        y = D_PALETTE_MARGIN + D_PALETTE_PAD;
+        y = f * (D_PALETTE_MARGIN + D_PALETTE_PAD);
         for text in texts {
             canvas.draw(
                 &text,
-                DrawParam::default().dest(glam::vec2(D_PALETTE_MARGIN + D_PALETTE_PAD, y)),
+                DrawParam::default().dest(glam::vec2(f * (D_PALETTE_MARGIN + D_PALETTE_PAD), y)),
             );
             y += text.measure(ctx).unwrap().y;
         }
@@ -238,13 +239,17 @@ impl CommandUI {
 
     fn draw_dialog(&self, ctx: &mut Context, g: &mut Canvas, title: &str, options: Vec<DrawText>) {
         let (w, h) = Has::<GraphicsContext>::retrieve(ctx).drawable_size();
+        let f = h / D_BASE;
 
         let title_text = {
             let mut t = Text::new(title);
             t.set_layout(TextLayout::top_left());
             t.set_font(S_FONT);
-            t.set_scale(D_COMMAND_TEXT_SCALE);
-            t.set_bounds(glam::vec2(w - 2.0 * (D_DIALOG_MARGIN_X + D_DIALOG_PAD), h));
+            t.set_scale(f * D_COMMAND_TEXT_SCALE);
+            t.set_bounds(glam::vec2(
+                w - 2.0 * f * (D_DIALOG_MARGIN_X + D_DIALOG_PAD),
+                h,
+            ));
             t.set_wrap(true);
             t
         };
@@ -258,7 +263,7 @@ impl CommandUI {
             .map(|o| {
                 let mut t = o.to_ggez();
                 t.set_font(S_FONT);
-                t.set_scale(D_COMMAND_TEXT_SCALE);
+                t.set_scale(f * D_COMMAND_TEXT_SCALE);
                 t
             })
             .collect();
@@ -270,15 +275,15 @@ impl CommandUI {
             })
             .collect();
         let opts_w = opt_sizes.iter().map(|(x, _)| *x).sum::<f32>()
-            + opt_sizes.len().saturating_sub(1) as f32 * D_DIALOG_SPACE_X;
+            + opt_sizes.len().saturating_sub(1) as f32 * f * D_DIALOG_SPACE_X;
         let opts_h = opt_sizes
             .iter()
             .map(|(_, y)| *y)
             .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap_or(-D_DIALOG_SPACE_Y);
+            .unwrap_or(-f * D_DIALOG_SPACE_Y);
 
         let content_w = title_w.max(opts_w);
-        let content_h = title_h + D_DIALOG_SPACE_Y + opts_h;
+        let content_h = title_h + f * D_DIALOG_SPACE_Y + opts_h;
         let content_y = (h - content_h) / 2.0;
         let content_x = (w - content_w) / 2.0;
 
@@ -286,17 +291,17 @@ impl CommandUI {
         let title_y = content_y;
 
         let opts_x = content_x + (content_w - opts_w) / 2.0;
-        let opts_y = title_y + title_h + D_DIALOG_SPACE_Y;
+        let opts_y = title_y + title_h + f * D_DIALOG_SPACE_Y;
 
         g.draw(
             &Mesh::new_rectangle(
                 ctx,
                 DrawMode::fill(),
                 Rect::new(
-                    content_x - D_DIALOG_PAD,
-                    content_y - D_DIALOG_PAD,
-                    content_w + 2.0 * D_DIALOG_PAD,
-                    content_h + 2.0 * D_DIALOG_PAD,
+                    content_x - f * D_DIALOG_PAD,
+                    content_y - f * D_DIALOG_PAD,
+                    content_w + 2.0 * f * D_DIALOG_PAD,
+                    content_h + 2.0 * f * D_DIALOG_PAD,
                 ),
                 C_PALETTE_BG,
             )
@@ -310,7 +315,7 @@ impl CommandUI {
         let mut opt_x = opts_x;
         for (opt, (opt_w, _)) in opts.iter().zip(opt_sizes.iter()) {
             g.draw(opt, DrawParam::default().dest(glam::vec2(opt_x, opts_y)));
-            opt_x += opt_w + D_DIALOG_SPACE_X;
+            opt_x += opt_w + f * D_DIALOG_SPACE_X;
         }
     }
 

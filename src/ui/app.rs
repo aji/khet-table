@@ -142,7 +142,7 @@ impl App {
     fn draw(&mut self, ctx: &mut Context, g: &mut Canvas, is_active: bool) -> GameResult {
         let (w, h) = Has::<GraphicsContext>::retrieve(ctx).drawable_size();
 
-        let r = self.renderer.setup(Rect::new(0.0, 0.0, w, h));
+        let r = self.renderer.setup(ctx, Rect::new(0.0, 0.0, w, h));
 
         let mut b = self.game.latest().clone();
         if let Ok(m) = self.state.to_move(&b) {

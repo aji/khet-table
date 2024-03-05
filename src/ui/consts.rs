@@ -31,6 +31,7 @@ pub const C_SCREEN_STATUS: Color = C_WHITE;
 pub const C_CURSOR_NORMAL: Color = C_BLUE;
 pub const C_CURSOR_ACTIVE: Color = C_GREEN;
 
+pub const D_BASE: f32 = 600.0;
 pub const D_BOARD_PAD: f32 = 30.0;
 pub const D_COMMAND_TEXT_SCALE: f32 = 25.0;
 pub const D_PALETTE_MARGIN: f32 = 10.0;
