@@ -3,13 +3,9 @@ use std::f32::consts::TAU;
 use ggez::{
     glam,
     graphics::{Canvas, Color, DrawMode, DrawParam, LineCap, LineJoin, Mesh, Rect, StrokeOptions},
-    GameResult,
 };
 
-use crate::{
-    bb,
-    board::{self, Board, Location, Role},
-};
+use crate::{bb, board as B};
 
 use super::consts::*;
 
@@ -114,7 +110,8 @@ pub struct RendererInstance<'a> {
 }
 
 impl<'a> RendererInstance<'a> {
-    fn rc(&self, r: usize, c: usize) -> DrawParam {
+    fn rc(&self, loc: B::Location) -> DrawParam {
+        let (r, c) = loc.to_rc();
         DrawParam::default()
             .offset(glam::vec2(0.5, 0.5))
             .dest(glam::vec2(
@@ -125,58 +122,51 @@ impl<'a> RendererInstance<'a> {
     }
 
     pub fn draw_board(&self, g: &mut Canvas, board: &bb::Board) {
-        let b: Board = board.clone().into();
+        let b: B::Board = board.clone().into();
 
-        for row in 0..8 {
-            g.draw(&self.r.mesh_dot, self.rc(row, 0).color(C_BOARD_RED));
-            g.draw(&self.r.mesh_dot, self.rc(row, 9).color(C_BOARD_WHITE));
+        for loc in b.restricted_squares(B::Color::White) {
+            g.draw(&self.r.mesh_dot, self.rc(loc).color(C_BOARD_WHITE));
         }
-        g.draw(&self.r.mesh_dot, self.rc(0, 1).color(C_BOARD_WHITE));
-        g.draw(&self.r.mesh_dot, self.rc(7, 1).color(C_BOARD_WHITE));
-        g.draw(&self.r.mesh_dot, self.rc(0, 8).color(C_BOARD_RED));
-        g.draw(&self.r.mesh_dot, self.rc(7, 8).color(C_BOARD_RED));
+        for loc in b.restricted_squares(B::Color::Red) {
+            g.draw(&self.r.mesh_dot, self.rc(loc).color(C_BOARD_RED));
+        }
 
-        for loc in Location::all() {
+        for loc in B::Location::all() {
             let piece = match b[loc] {
                 Some(piece) => piece,
                 None => continue,
             };
 
             let mesh = match piece.role() {
-                Role::Pyramid => &self.r.mesh_pyramid,
-                Role::Scarab => &self.r.mesh_scarab,
-                Role::Anubis => &self.r.mesh_anubis,
-                Role::Sphinx => &self.r.mesh_sphinx,
-                Role::Pharaoh => &self.r.mesh_pharaoh,
+                B::Role::Pyramid => &self.r.mesh_pyramid,
+                B::Role::Scarab => &self.r.mesh_scarab,
+                B::Role::Anubis => &self.r.mesh_anubis,
+                B::Role::Sphinx => &self.r.mesh_sphinx,
+                B::Role::Pharaoh => &self.r.mesh_pharaoh,
             };
 
             let color = match piece.color() {
-                board::Color::Red => C_BOARD_RED,
-                board::Color::White => C_BOARD_WHITE,
+                B::Color::Red => C_BOARD_RED,
+                B::Color::White => C_BOARD_WHITE,
             };
 
             let rot = match piece.dir() {
-                board::Direction::NORTH => 0.0,
-                board::Direction::EAST => 0.25 * TAU,
-                board::Direction::SOUTH => 0.5 * TAU,
-                board::Direction::WEST => 0.75 * TAU,
+                B::Direction::NORTH => 0.0,
+                B::Direction::EAST => 0.25 * TAU,
+                B::Direction::SOUTH => 0.5 * TAU,
+                B::Direction::WEST => 0.75 * TAU,
                 _ => unreachable!(),
             };
 
-            g.draw(
-                mesh,
-                self.rc(loc.rank().to_row(), loc.file().to_col())
-                    .color(color)
-                    .rotation(rot),
-            );
+            g.draw(mesh, self.rc(loc).color(color).rotation(rot));
         }
     }
 
-    pub fn draw_cursor(&self, g: &mut Canvas, r: usize, c: usize, active: bool) {
+    pub fn draw_cursor(&self, g: &mut Canvas, loc: B::Location, active: bool) {
         let color = match active {
             true => C_CURSOR_ACTIVE,
             false => C_CURSOR_NORMAL,
         };
-        g.draw(&self.r.mesh_cursor, self.rc(r, c).color(color));
+        g.draw(&self.r.mesh_cursor, self.rc(loc).color(color));
     }
 }

@@ -5,7 +5,7 @@ pub fn parse(s: &str) -> Result<board::Board, String> {
     let mut b = board::Board::empty();
 
     for row in 0..8 {
-        let rank = board::Rank::from_row(row);
+        let rank = board::Rank::from_row(row).unwrap();
 
         while s.peek().copied().unwrap_or('$').is_whitespace() {
             s.next();
@@ -19,7 +19,7 @@ pub fn parse(s: &str) -> Result<board::Board, String> {
         }
 
         for col in 0..10 {
-            let file = board::File::from_col(col);
+            let file = board::File::from_col(col).unwrap();
             let loc = board::Location::new(rank, file);
 
             while s.peek().copied().unwrap_or('$').is_whitespace() {

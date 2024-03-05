@@ -5,8 +5,7 @@ use ggez::{
     context::Has,
     glam,
     graphics::{
-        Canvas, DrawMode, DrawParam, GraphicsContext, Mesh, Rect, Text, TextAlign, TextFragment,
-        TextLayout,
+        Canvas, DrawMode, DrawParam, GraphicsContext, Mesh, Rect, Text, TextFragment, TextLayout,
     },
     input::keyboard::{KeyCode, KeyMods},
     Context, GameResult,

@@ -5,7 +5,7 @@ use ggez::{
     graphics::{FontData, GraphicsContext},
     ContextBuilder,
 };
-use khet::{bb, ui::app::AppHandler};
+use khet::ui::app::AppHandler;
 
 const IOSEVKA: &'static [u8] = include_bytes!("../iosevka/iosevka-fixed-regular.ttf");
 
@@ -17,7 +17,9 @@ pub fn main() {
                 .samples(NumSamples::Four),
         )
         .window_mode(
-            WindowMode::default().resizable(true)
+            WindowMode::default()
+                .dimensions(1920.0, 1080.0)
+                .resizable(true),
         )
         .build()
         .expect("failed to build ggez context");

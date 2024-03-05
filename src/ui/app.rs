@@ -80,15 +80,18 @@ pub struct App {
     state: AppState,
 }
 
+#[derive(Copy, Clone)]
 enum AppState {
-    Cursor(usize, usize),
+    Cursor(B::Location),
     Move(B::Location, (isize, isize, isize)),
 }
 
 impl AppState {
-    fn to_move(&self) -> Result<B::Move, B::Location> {
-        match self {
-            AppState::Cursor(r, c) => Err(B::Location::from_rc(*r, *c)),
+    fn to_move(&self, b: &bb::Board) -> Result<B::Move, B::Location> {
+        let m0 = match self {
+            AppState::Cursor(loc) => {
+                return Err(*loc);
+            }
             AppState::Move(loc, m) => {
                 let op = match m {
                     (-1, 0, 0) => B::Op::N,
@@ -102,11 +105,22 @@ impl AppState {
                     (0, 0, 1) => B::Op::CW,
                     (0, 0, -1) => B::Op::CCW,
                     (0, 0, 0) => return Err(*loc),
-                    _ => unreachable!(),
+                    _ => unreachable!("{:?}", m),
                 };
-                Ok(B::Move::new(*loc, op))
+                match B::Move::new(*loc, op) {
+                    Ok(m) => m,
+                    Err(_) => return Err(*loc),
+                }
+            }
+        };
+
+        for m in b.movegen().to_vec() {
+            if Into::<B::Move>::into(m) == m0 {
+                return Ok(m0);
             }
         }
+
+        Err(m0.start())
     }
 }
 
@@ -116,13 +130,13 @@ impl App {
             game: bb::Game::new(bb::Board::new_classic()),
             renderer: Renderer::new(ctx),
             cur_time: 0,
-            state: AppState::Cursor(7, 9),
+            state: AppState::Cursor(B::Location::from_rc(7, 9).unwrap()),
         }
     }
 
     fn new_game(&mut self, b: bb::Board) {
         self.game = bb::Game::new(b);
-        self.state = AppState::Cursor(7, 9);
+        self.state = AppState::Cursor(B::Location::from_rc(7, 9).unwrap());
     }
 
     fn draw(&mut self, ctx: &mut Context, g: &mut Canvas, is_active: bool) -> GameResult {
@@ -131,7 +145,7 @@ impl App {
         let r = self.renderer.setup(Rect::new(0.0, 0.0, w, h));
 
         let mut b = self.game.latest().clone();
-        if let Ok(m) = self.state.to_move() {
+        if let Ok(m) = self.state.to_move(&b) {
             b.apply_move(&m.into());
         }
         r.draw_board(g, &b);
@@ -149,19 +163,18 @@ impl App {
 
     fn draw_cursor<'a>(&self, ctx: &Context, g: &mut Canvas, render: &RendererInstance<'a>) {
         match self.state {
-            AppState::Cursor(r, c) => {
+            AppState::Cursor(loc) => {
                 if self.cursor_blink(ctx) {
-                    render.draw_cursor(g, r, c, false);
+                    render.draw_cursor(g, loc, false);
                 }
             }
-            AppState::Move(loc, (dr, dc, _)) => {
-                let (r0, c0) = loc.to_rc();
-                render.draw_cursor(
-                    g,
-                    (r0 as isize + dr) as usize,
-                    (c0 as isize + dc) as usize,
-                    true,
-                );
+            s @ AppState::Move(loc0, (dr, dc, _)) => {
+                let loc = s
+                    .to_move(self.game.latest())
+                    .map(|m| m.end())
+                    .unwrap_or(loc0);
+                render.draw_cursor(g, loc, false);
+                render.draw_cursor(g, loc0.move_by_clamped(dr as i8, dc as i8), true);
             }
         }
     }
@@ -174,41 +187,49 @@ impl App {
     ) -> Option<CommandCont> {
         self.cur_time = ctx.time.time_since_start().as_millis();
 
-        self.state = match self.state {
-            AppState::Cursor(r, c) => match input.keycode {
-                Some(KeyCode::Up) => AppState::Cursor(r.saturating_sub(1), c),
-                Some(KeyCode::Left) => AppState::Cursor(r, c.saturating_sub(1)),
-                Some(KeyCode::Down) => AppState::Cursor((r + 1).min(7), c),
-                Some(KeyCode::Right) => AppState::Cursor(r, (c + 1).min(9)),
-                Some(KeyCode::Return) => AppState::Move(B::Location::from_rc(r, c), (0, 0, 0)),
-                _ => AppState::Cursor(r, c),
+        self.state = match &self.state {
+            s @ AppState::Cursor(loc) => match input.keycode {
+                Some(KeyCode::Up) => AppState::Cursor(loc.move_by_clamped(-1, 0)),
+                Some(KeyCode::Left) => AppState::Cursor(loc.move_by_clamped(0, -1)),
+                Some(KeyCode::Down) => AppState::Cursor(loc.move_by_clamped(1, 0)),
+                Some(KeyCode::Right) => AppState::Cursor(loc.move_by_clamped(0, 1)),
+                Some(KeyCode::Return) => AppState::Move(*loc, (0, 0, 0)),
+                _ => *s,
             },
 
-            AppState::Move(loc0, (dr0, dc0, dd0)) => {
+            s @ AppState::Move(loc0, (dr0, dc0, dd0)) => {
                 if let Some(KeyCode::Return) = input.keycode {
-                    let (r1, c1) = match self.state.to_move() {
+                    let b = self.game.latest();
+                    let loc = match s.to_move(b) {
                         Ok(m) => {
                             self.game.add_move(&m.into());
-                            m.end().to_rc()
+                            m.end()
                         }
-                        Err(loc) => loc.to_rc(),
+                        Err(loc) => loc,
                     };
-                    AppState::Cursor(r1, c1)
+                    AppState::Cursor(loc)
                 } else {
+                    let (r0, c0) = loc0.to_rc();
                     let (dr, dc, dd) = {
-                        let (dr, dc, dd) = match input.keycode {
-                            Some(KeyCode::Up) => (dr0 - 1, dc0, 0),
-                            Some(KeyCode::Left) => (dr0, dc0 - 1, 0),
-                            Some(KeyCode::Down) => (dr0 + 1, dc0, 0),
-                            Some(KeyCode::Right) => (dr0, dc0 + 1, 0),
-                            Some(KeyCode::LBracket) => (0, 0, dd0 - 1),
-                            Some(KeyCode::RBracket) => (0, 0, dd0 + 1),
-                            _ => (dr0, dc0, dd0),
+                        let r1 = r0 as isize + dr0;
+                        let c1 = c0 as isize + dc0;
+                        let (r2, c2, dd) = match input.keycode {
+                            Some(KeyCode::Up) => (r1 - 1, c1, 0),
+                            Some(KeyCode::Left) => (r1, c1 - 1, 0),
+                            Some(KeyCode::Down) => (r1 + 1, c1, 0),
+                            Some(KeyCode::Right) => (r1, c1 + 1, 0),
+                            Some(KeyCode::LBracket) => (r1, c1, *dd0 - 1),
+                            Some(KeyCode::RBracket) => (r1, c1, *dd0 + 1),
+                            _ => (r1, c1, *dd0),
                         };
-                        (dr.clamp(-1, 1), dc.clamp(-1, 1), dd.clamp(-1, 1))
+                        (
+                            (r2.clamp(0, 7) - r0 as isize).clamp(-1, 1),
+                            (c2.clamp(0, 9) - c0 as isize).clamp(-1, 1),
+                            dd.clamp(-1, 1),
+                        )
                     };
 
-                    AppState::Move(loc0, (dr, dc, dd))
+                    AppState::Move(*loc0, (dr, dc, dd))
                 }
             }
         };

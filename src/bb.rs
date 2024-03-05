@@ -172,7 +172,7 @@ fn loc_to(loc: &B::Location) -> u128 {
 }
 fn to_loc(m: u128) -> B::Location {
     let (r, c) = to_rc(m);
-    B::Location::new(B::Rank::from_row(r), B::File::from_col(c))
+    B::Location::from_rc(r, c).unwrap()
 }
 
 struct BitboardPretty(u128);
@@ -868,7 +868,7 @@ impl Into<B::Move> for Move {
             _ => unreachable!(),
         };
 
-        B::Move::new(loc, op)
+        B::Move::new(loc, op).unwrap()
     }
 }
 

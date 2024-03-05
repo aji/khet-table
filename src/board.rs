@@ -3,6 +3,31 @@ use std::{fmt, ops};
 //
 //
 //
+// GAME ERRORS
+// =============================================================================
+
+#[derive(Copy, Clone, Debug)]
+pub enum Error {
+    InvalidRank(isize),
+    InvalidFile(isize),
+    InvalidLocation(isize, isize),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRank(r) => write!(f, "invalid rank: {}", r),
+            Self::InvalidFile(c) => write!(f, "invalid file: {}", c),
+            Self::InvalidLocation(r, c) => write!(f, "invalid location: {}, {}", r, c),
+        }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+//
+//
+//
 // BOARD LOCATIONS
 // =============================================================================
 
@@ -17,8 +42,8 @@ impl Location {
         Location { rank, file }
     }
 
-    pub fn from_rc(row: usize, col: usize) -> Location {
-        Location::new(Rank::from_row(row), File::from_col(col))
+    pub fn from_rc(row: usize, col: usize) -> Result<Location> {
+        Ok(Location::new(Rank::from_row(row)?, File::from_col(col)?))
     }
 
     pub fn all() -> impl Iterator<Item = Location> {
@@ -29,18 +54,24 @@ impl Location {
         (self.rank.to_row(), self.file.to_col())
     }
 
-    fn move_by(&self, drow: i8, dcol: i8) -> Location {
+    pub fn move_by(&self, drow: i8, dcol: i8) -> Result<Location> {
         let nr = self.rank.0 as i8 + drow;
         let nc = self.file.0 as i8 + dcol;
         if nr < 0 || 8 <= nr || nc < 0 || 10 <= nc {
-            panic!(
-                "move_by({}, {}) out of bounds at ({}, {})",
-                drow, dcol, nr, nc
-            );
+            return Err(Error::InvalidLocation(nr as isize, nc as isize));
         }
-        Location {
+        Ok(Location {
             rank: Rank(nr as u8),
             file: File(nc as u8),
+        })
+    }
+
+    pub fn move_by_clamped(&self, drow: i8, dcol: i8) -> Location {
+        let nr = self.rank.0 as i8 + drow;
+        let nc = self.file.0 as i8 + dcol;
+        Location {
+            rank: Rank(nr.clamp(0, 7) as u8),
+            file: File(nc.clamp(0, 9) as u8),
         }
     }
 
@@ -66,7 +97,7 @@ impl Iterator for AllLocations {
         if self.0 >= 80 {
             None
         } else {
-            let res = Location::new(Rank::from_row(self.0 / 10), File::from_col(self.0 % 10));
+            let res = Location::from_rc(self.0 / 10, self.0 % 10).unwrap();
             self.0 += 1;
             Some(res)
         }
@@ -85,9 +116,12 @@ impl Rank {
         AllRanks(0)
     }
 
-    pub fn from_row(r: usize) -> Rank {
-        assert!(r < 8);
-        Rank(r as u8)
+    pub fn from_row(r: usize) -> Result<Rank> {
+        if r < 8 {
+            Ok(Rank(r as u8))
+        } else {
+            Err(Error::InvalidRank(r as isize))
+        }
     }
 
     pub fn to_row(&self) -> usize {
@@ -103,7 +137,7 @@ impl fmt::Display for Rank {
 
 impl TryFrom<char> for Rank {
     type Error = String;
-    fn try_from(value: char) -> Result<Self, Self::Error> {
+    fn try_from(value: char) -> std::result::Result<Self, Self::Error> {
         RANK_SYMS
             .chars()
             .enumerate()
@@ -140,9 +174,12 @@ impl File {
         AllFiles(0)
     }
 
-    pub fn from_col(c: usize) -> File {
-        assert!(c < 10);
-        File(c as u8)
+    pub fn from_col(c: usize) -> Result<File> {
+        if c < 10 {
+            Ok(File(c as u8))
+        } else {
+            Err(Error::InvalidFile(c as isize))
+        }
     }
 
     pub fn to_col(&self) -> usize {
@@ -158,7 +195,7 @@ impl fmt::Display for File {
 
 impl TryFrom<char> for File {
     type Error = String;
-    fn try_from(value: char) -> Result<Self, Self::Error> {
+    fn try_from(value: char) -> std::result::Result<Self, Self::Error> {
         FILE_SYMS
             .chars()
             .enumerate()
@@ -403,7 +440,8 @@ impl ops::AddAssign<DirDelta> for Piece {
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct Move {
-    loc: Location,
+    start: Location,
+    end: Location,
     op: Op,
 }
 
@@ -422,8 +460,20 @@ pub enum Op {
 }
 
 impl Move {
-    pub fn new(loc: Location, op: Op) -> Move {
-        Move { loc, op }
+    pub fn new(start: Location, op: Op) -> Result<Move> {
+        let end = match op {
+            Op::N => start.move_by(-1, 0)?,
+            Op::NE => start.move_by(-1, 1)?,
+            Op::E => start.move_by(0, 1)?,
+            Op::SE => start.move_by(1, 1)?,
+            Op::S => start.move_by(1, 0)?,
+            Op::SW => start.move_by(1, -1)?,
+            Op::W => start.move_by(0, -1)?,
+            Op::NW => start.move_by(-1, -1)?,
+            Op::CW => start,
+            Op::CCW => start,
+        };
+        Ok(Move { start, end, op })
     }
 
     pub fn op(&self) -> Op {
@@ -431,22 +481,11 @@ impl Move {
     }
 
     pub fn start(&self) -> Location {
-        self.loc
+        self.start
     }
 
     pub fn end(&self) -> Location {
-        match self.op {
-            Op::N => self.loc.move_by(-1, 0),
-            Op::NE => self.loc.move_by(-1, 1),
-            Op::E => self.loc.move_by(0, 1),
-            Op::SE => self.loc.move_by(1, 1),
-            Op::S => self.loc.move_by(1, 0),
-            Op::SW => self.loc.move_by(1, -1),
-            Op::W => self.loc.move_by(0, -1),
-            Op::NW => self.loc.move_by(-1, -1),
-            Op::CW => self.loc,
-            Op::CCW => self.loc,
-        }
+        self.end
     }
 
     pub fn rotation(&self) -> DirDelta {
@@ -475,6 +514,13 @@ impl Board {
             squares: [None; 80],
         }
     }
+
+    pub fn restricted_squares(&self, color: Color) -> RestrictedSquares {
+        RestrictedSquares {
+            white: color == Color::White,
+            i: 0,
+        }
+    }
 }
 
 impl ops::Index<Location> for Board {
@@ -487,5 +533,31 @@ impl ops::Index<Location> for Board {
 impl ops::IndexMut<Location> for Board {
     fn index_mut(&mut self, index: Location) -> &mut Self::Output {
         &mut self.squares[index.rank.0 as usize * 10 + index.file.0 as usize]
+    }
+}
+
+pub struct RestrictedSquares {
+    white: bool,
+    i: usize,
+}
+
+impl Iterator for RestrictedSquares {
+    type Item = Location;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.i >= 10 {
+            return None;
+        }
+        let (r0, c0) = match self.i {
+            9 => (7, 1),
+            8 => (0, 1),
+            j => (j, 9),
+        };
+        self.i += 1;
+        let (r, c) = if self.white {
+            (r0, c0)
+        } else {
+            (7 - r0, 9 - c0)
+        };
+        Some(Location::from_rc(r, c).unwrap())
     }
 }
