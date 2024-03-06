@@ -198,7 +198,7 @@ impl CommandUI {
         cb: F,
     ) {
         let (w, h) = Has::<GraphicsContext>::retrieve(ctx).drawable_size();
-        let f: f32 = h / D_BASE;
+        let f = scale_factor(ctx);
         let mut i = 0;
         let mut y = f * (D_PALETTE_MARGIN + D_PALETTE_PAD);
         let mut texts: Vec<Text> = Vec::new();
@@ -239,7 +239,7 @@ impl CommandUI {
 
     fn draw_dialog(&self, ctx: &mut Context, g: &mut Canvas, title: &str, options: Vec<DrawText>) {
         let (w, h) = Has::<GraphicsContext>::retrieve(ctx).drawable_size();
-        let f = h / D_BASE;
+        let f = scale_factor(ctx);
 
         let title_text = {
             let mut t = Text::new(title);

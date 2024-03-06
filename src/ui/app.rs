@@ -1,7 +1,7 @@
 use ggez::{
-    context::Has,
     event::EventHandler,
-    graphics::{Canvas, GraphicsContext, Rect},
+    glam,
+    graphics::{Canvas, DrawParam, Rect, Text},
     input::keyboard::KeyCode,
     Context, GameResult,
 };
@@ -9,8 +9,9 @@ use ggez::{
 use crate::{bb, board as B};
 
 use super::{
+    bot::{self, BotDriver},
     command::{AlertLevel, Command, CommandCont, CommandSet, CommandUI},
-    consts::{self, T_CURSOR_BLINK_MILLIS},
+    consts::*,
     render::{Renderer, RendererInstance},
 };
 
@@ -39,11 +40,12 @@ impl AppHandler {
 
 impl EventHandler for AppHandler {
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
+        self.app.update();
         Ok(())
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let mut canvas = Canvas::from_frame(ctx, consts::C_BOARD_BG);
+        let mut canvas = Canvas::from_frame(ctx, C_BOARD_BG);
         self.app
             .draw(ctx, &mut canvas, !self.commands.is_active())?;
         if self.commands.is_active() {
@@ -71,13 +73,6 @@ impl EventHandler for AppHandler {
 
         Ok(())
     }
-}
-
-pub struct App {
-    game: bb::Game,
-    renderer: Renderer,
-    cur_time: u128,
-    state: AppState,
 }
 
 #[derive(Copy, Clone)]
@@ -124,10 +119,19 @@ impl AppState {
     }
 }
 
+pub struct App {
+    game: bb::Game,
+    bot: bot::BotDriver,
+    renderer: Renderer,
+    cur_time: u128,
+    state: AppState,
+}
+
 impl App {
     fn new(ctx: &mut Context) -> App {
         App {
             game: bb::Game::new(bb::Board::new_classic()),
+            bot: BotDriver::new(),
             renderer: Renderer::new(ctx),
             cur_time: 0,
             state: AppState::Cursor(B::Location::from_rc(7, 9).unwrap()),
@@ -137,12 +141,25 @@ impl App {
     fn new_game(&mut self, b: bb::Board) {
         self.game = bb::Game::new(b);
         self.state = AppState::Cursor(B::Location::from_rc(7, 9).unwrap());
+        self.sync_bot();
+    }
+
+    fn sync_bot(&mut self) {
+        self.bot.set_game(&self.game);
+        self.bot.search(Some(2000));
+    }
+
+    fn update(&mut self) {
+        self.bot.update();
     }
 
     fn draw(&mut self, ctx: &mut Context, g: &mut Canvas, is_active: bool) -> GameResult {
-        let (w, h) = Has::<GraphicsContext>::retrieve(ctx).drawable_size();
+        let (w, h) = ctx.gfx.drawable_size();
+        let f = scale_factor(ctx);
 
-        let r = self.renderer.setup(ctx, Rect::new(0.0, 0.0, w, h));
+        let r = self
+            .renderer
+            .setup(ctx, Rect::new(0.0, 0.0, w, h - f * D_BOT_STATUS_HEIGHT));
 
         let mut b = self.game.latest().clone();
         if let Ok(m) = self.state.to_move(&b) {
@@ -152,6 +169,8 @@ impl App {
         if is_active {
             self.draw_cursor(ctx, g, &r);
         }
+
+        self.draw_bot_status(ctx, g);
 
         Ok(())
     }
@@ -179,6 +198,25 @@ impl App {
         }
     }
 
+    fn draw_bot_status(&self, ctx: &Context, g: &mut Canvas) {
+        let (_, h) = ctx.gfx.drawable_size();
+        let f = scale_factor(ctx);
+
+        let text = {
+            let s = format!("BOT: {}", self.bot.status());
+            let mut text = Text::new(s);
+            text.set_font(S_FONT);
+            text.set_scale(f * D_COMMAND_TEXT_SCALE);
+            text
+        };
+
+        let text_box = text.measure(ctx).unwrap();
+        let text_x = f * D_BOT_STATUS_X;
+        let text_y = h - (f * D_BOT_STATUS_HEIGHT + text_box.y) / 2.0;
+
+        g.draw(&text, DrawParam::default().dest(glam::vec2(text_x, text_y)));
+    }
+
     fn key_down_event(
         &mut self,
         ctx: &mut ggez::Context,
@@ -203,6 +241,7 @@ impl App {
                     let loc = match s.to_move(b) {
                         Ok(m) => {
                             self.game.add_move(&m.into());
+                            self.sync_bot();
                             m.end()
                         }
                         Err(loc) => loc,

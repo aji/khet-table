@@ -1,4 +1,7 @@
-use ggez::graphics::Color;
+use ggez::{
+    context::Has,
+    graphics::{Color, GraphicsContext},
+};
 
 pub const S_FONT: &'static str = "Iosevka";
 
@@ -41,5 +44,11 @@ pub const D_DIALOG_MARGIN_X: f32 = 50.0;
 pub const D_DIALOG_PAD: f32 = 20.0;
 pub const D_DIALOG_SPACE_X: f32 = 50.0;
 pub const D_DIALOG_SPACE_Y: f32 = 10.0;
+pub const D_BOT_STATUS_X: f32 = 50.0;
+pub const D_BOT_STATUS_HEIGHT: f32 = 50.0;
 
 pub const T_CURSOR_BLINK_MILLIS: u128 = 400;
+
+pub fn scale_factor<C: Has<GraphicsContext>>(ctx: &C) -> f32 {
+    ctx.retrieve().drawable_size().1 / D_BASE
+}

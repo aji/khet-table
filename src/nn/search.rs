@@ -60,6 +60,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct Output {
     pub m: bb::Move,
     pub policy: Vec<f32>,
@@ -75,42 +76,86 @@ pub fn run<C: Context>(
     game: &bb::Game,
     params: &Params,
 ) -> Output {
-    let mut iters = 0;
-    let mut root = Node::new(*game.latest(), 0.0, 0);
-    let mut stats: Stats;
+    let mut search = Search::new(env, model, game.clone(), params.clone());
 
     loop {
-        root.expand(env, model, params, game.clone(), true);
-
-        iters += 1;
-        stats = Stats {
-            iterations: iters,
-            policy: root.implied_policy(),
-            root_value: root.total_value / root.visits as f32,
-            tree_size: root.size,
-            tree_max_height: root.max_height,
-            tree_min_height: root.min_height,
-            pv_depth: root.pv_depth(),
-        };
-
-        if let Signal::Abort = ctx.defer(&stats) {
+        search.step();
+        if let Signal::Abort = ctx.defer(&search.stats()) {
             break;
         }
     }
 
-    let max_child = if params.selfplay && game.len_plys() < SAMPLING_MOVES {
-        root.sample_child_by_visits()
-    } else {
-        root.max_child_by_visits()
-    };
-    let max_child = max_child.expect("root has no children");
+    search.output()
+}
 
-    Output {
-        m: bb::Move::nn_ith(max_child.index),
-        policy: root.implied_policy(),
-        value: max_child.node.expected_value(),
-        root_value: root.total_value / root.visits as f32,
-        stats,
+pub struct Search<'a, 'name> {
+    env: &'a ag::VariableEnvironment<'name, nn::Float>,
+    model: &'a nn::KhetModel,
+    game: bb::Game,
+    params: Params,
+
+    iters: usize,
+    root: Node,
+}
+
+impl<'a, 'name> Search<'a, 'name> {
+    pub fn new(
+        env: &'a ag::VariableEnvironment<'name, nn::Float>,
+        model: &'a nn::KhetModel,
+        game: bb::Game,
+        params: Params,
+    ) -> Search<'a, 'name> {
+        let root = Node::new(game.latest().clone(), 0.0, 0);
+        Search {
+            env,
+            model,
+            game,
+            params,
+
+            iters: 0,
+            root,
+        }
+    }
+
+    pub fn step(&mut self) {
+        self.root
+            .expand(self.env, self.model, &self.params, self.game.clone(), true);
+        self.iters += 1;
+    }
+
+    pub fn iterations(&self) -> usize {
+        self.iters
+    }
+
+    pub fn stats(&self) -> Stats {
+        Stats {
+            iterations: self.iters,
+            policy: self.root.implied_policy(),
+            root_value: self.root.total_value / self.root.visits as f32,
+            tree_size: self.root.size,
+            tree_max_height: self.root.max_height,
+            tree_min_height: self.root.min_height,
+            pv_depth: self.root.pv_depth(),
+        }
+    }
+
+    pub fn output(&self) -> Output {
+        let max_child = if self.params.selfplay && self.game.len_plys() < SAMPLING_MOVES {
+            self.root.sample_child_by_visits()
+        } else {
+            self.root.max_child_by_visits()
+        };
+
+        // FIXME: this expect() can panic if the root is an endgame state
+        let max_child = max_child.expect("root has no children");
+
+        Output {
+            m: bb::Move::nn_ith(max_child.index),
+            policy: self.root.implied_policy(),
+            value: max_child.node.expected_value(),
+            root_value: self.root.total_value / self.root.visits as f32,
+            stats: self.stats(),
+        }
     }
 }
 
