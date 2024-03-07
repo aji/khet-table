@@ -62,8 +62,12 @@ fn bot_thread(recv: mpsc::Receiver<BotMessageIn>, send: mpsc::Sender<BotMessageO
         match m {
             Some(BotMessageIn::SetGame(tag, game)) => {
                 let params = Params::default_eval();
-                let search = nn::search::Search::new(&env, &model, (*game).clone(), params);
-                state = SearchPaused(tag, search);
+                if game.latest().is_terminal() {
+                    state = Initial
+                } else {
+                    let search = nn::search::Search::new(&env, &model, (*game).clone(), params);
+                    state = SearchPaused(tag, search);
+                }
             }
             Some(BotMessageIn::Search(limit)) => {
                 state = match state {
@@ -195,4 +199,30 @@ impl BotDriver {
             format!("Ready.")
         }
     }
+
+    pub fn output(&self) -> Option<&nn::search::Output> {
+        (&self.search_done).as_ref()
+    }
+
+    pub fn policy(&self) -> Option<Vec<(bb::Move, f32)>> {
+        if !self.ready {
+            None
+        } else if let Some(ref out) = self.search_done {
+            Some(decode_policy(&out.policy))
+        } else if let Some(ref stats) = self.search_progress {
+            Some(decode_policy(&stats.policy))
+        } else {
+            None
+        }
+    }
+}
+
+fn decode_policy(policy: &[f32]) -> Vec<(bb::Move, f32)> {
+    let mut res = policy
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (bb::Move::nn_ith(i), *v))
+        .collect::<Vec<_>>();
+    res.sort_by(|a, b| a.1.total_cmp(&b.1).reverse());
+    res
 }

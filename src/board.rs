@@ -238,6 +238,23 @@ impl Direction {
     pub fn opp(self) -> Direction {
         Direction((self.0 + 2) % 4)
     }
+
+    pub fn drc(self) -> (isize, isize) {
+        match self.0 {
+            0 => (-1, 0),
+            1 => (0, 1),
+            2 => (1, 0),
+            3 => (0, -1),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn drow(self) -> isize {
+        self.drc().0
+    }
+    pub fn dcol(self) -> isize {
+        self.drc().1
+    }
 }
 
 impl ops::Add<DirDelta> for Direction {
@@ -413,6 +430,26 @@ impl Piece {
             Role::Pharaoh => true,
         }
     }
+
+    pub fn reflect(&self, incoming: Direction) -> Option<Direction> {
+        match self.role {
+            Role::Pyramid => match incoming - self.dir {
+                DirDelta::ZERO => None,
+                DirDelta::CW => None,
+                DirDelta::OPP => Some(incoming + DirDelta::CCW),
+                DirDelta::CCW => Some(incoming + DirDelta::CW),
+                _ => unreachable!(),
+            },
+            Role::Scarab => match incoming - self.dir {
+                DirDelta::ZERO => Some(incoming + DirDelta::CCW),
+                DirDelta::CW => Some(incoming + DirDelta::CW),
+                DirDelta::OPP => Some(incoming + DirDelta::CCW),
+                DirDelta::CCW => Some(incoming + DirDelta::CW),
+                _ => unreachable!(),
+            },
+            _ => None,
+        }
+    }
 }
 
 impl ops::Add<DirDelta> for Piece {
@@ -520,6 +557,43 @@ impl Board {
             white: color == Color::White,
             i: 0,
         }
+    }
+
+    pub fn laser_path(&self, color: Color) -> Vec<(isize, isize)> {
+        let mut path: Vec<(isize, isize)> = Vec::new();
+        let (mut r, mut c, mut dir) = match color {
+            Color::White => (7isize, 9isize, self.squares[79].unwrap().dir),
+            Color::Red => (0isize, 0isize, self.squares[0].unwrap().dir),
+        };
+
+        path.push((r, c));
+        r += dir.drow();
+        c += dir.dcol();
+
+        loop {
+            path.push((r, c));
+            if !(0 <= r && r < 8 && 0 <= c && c < 10) {
+                break;
+            }
+
+            dir = match self.squares[(r * 10 + c) as usize] {
+                Some(p) => {
+                    if p.is_vulnerable(dir) {
+                        break;
+                    }
+                    match p.reflect(dir) {
+                        Some(d) => d,
+                        None => break,
+                    }
+                }
+                None => dir,
+            };
+
+            r += dir.drow();
+            c += dir.dcol();
+        }
+
+        path
     }
 }
 

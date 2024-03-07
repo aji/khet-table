@@ -336,7 +336,8 @@ impl CommandUI {
             Some(k) => match self.cont {
                 CommandCont::Done => match k {
                     KeyCode::Down | KeyCode::Tab => {
-                        self.selection = (self.selection + 1).min(self.matches.len());
+                        self.selection =
+                            (self.selection + 1).min(self.matches.len().saturating_sub(1));
                     }
                     KeyCode::Up => {
                         self.selection = self.selection.saturating_sub(1);

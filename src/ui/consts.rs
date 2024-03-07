@@ -20,6 +20,7 @@ pub const C_BOARD_WHITE: Color = C_WHITE;
 pub const C_BOARD_LASER: Color = C_ACCENT;
 pub const C_BOARD_MOVE: Color = C_ACCENT;
 pub const C_BOARD_SECOND: Color = C_DARK_GREY;
+pub const C_BOARD_POLICY: Color = C_GREEN;
 pub const C_TREE_NORMAL: Color = C_DARK_GREY;
 pub const C_TREE_SELECTED: Color = C_WHITE;
 pub const C_TREE_BG: Color = C_BLACK;

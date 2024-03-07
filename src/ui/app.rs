@@ -24,8 +24,11 @@ impl AppHandler {
     pub fn new(ctx: &mut Context) -> AppHandler {
         let mut commands = CommandSet::new();
 
-        commands.add("File: New Game", cmd_new_game);
-        commands.add("File: Exit", cmd_exit);
+        commands.add("Game: Exit", cmd_game_exit);
+        commands.add("Game: New Game", cmd_game_new_game);
+        commands.add("Game: Undo", cmd_game_undo);
+        commands.add("Bot: Set Evals", cmd_bot_set_evals);
+        commands.add("Bot: Set Player", cmd_bot_set_player);
 
         AppHandler {
             app: App::new(ctx),
@@ -110,7 +113,7 @@ impl AppState {
         };
 
         for m in b.movegen().to_vec() {
-            if Into::<B::Move>::into(m) == m0 {
+            if TryInto::<B::Move>::try_into(m).unwrap() == m0 {
                 return Ok(m0);
             }
         }
@@ -122,6 +125,9 @@ impl AppState {
 pub struct App {
     game: bb::Game,
     bot: bot::BotDriver,
+    bot_evals: usize,
+    bot_plays_white: bool,
+    bot_plays_red: bool,
     renderer: Renderer,
     cur_time: u128,
     state: AppState,
@@ -129,13 +135,18 @@ pub struct App {
 
 impl App {
     fn new(ctx: &mut Context) -> App {
-        App {
+        let mut app = App {
             game: bb::Game::new(bb::Board::new_classic()),
             bot: BotDriver::new(),
-            renderer: Renderer::new(ctx),
+            bot_evals: 2000,
+            bot_plays_white: false,
+            bot_plays_red: false,
+            renderer: Renderer::new(ctx).unwrap(),
             cur_time: 0,
             state: AppState::Cursor(B::Location::from_rc(7, 9).unwrap()),
-        }
+        };
+        app.sync_bot();
+        app
     }
 
     fn new_game(&mut self, b: bb::Board) {
@@ -144,13 +155,27 @@ impl App {
         self.sync_bot();
     }
 
+    fn undo(&mut self) {
+        self.game.truncate((self.game.len_plys() - 1).max(1));
+        self.sync_bot();
+    }
+
     fn sync_bot(&mut self) {
         self.bot.set_game(&self.game);
-        self.bot.search(Some(2000));
+        self.bot.search(Some(self.bot_evals));
     }
 
     fn update(&mut self) {
         self.bot.update();
+        if let Some(out) = self.bot.output() {
+            if self.game.latest().white_to_move() && self.bot_plays_white {
+                self.game.add_move(&out.m);
+                self.sync_bot();
+            } else if !self.game.latest().white_to_move() && self.bot_plays_red {
+                self.game.add_move(&out.m);
+                self.sync_bot();
+            }
+        }
     }
 
     fn draw(&mut self, ctx: &mut Context, g: &mut Canvas, is_active: bool) -> GameResult {
@@ -162,12 +187,22 @@ impl App {
             .setup(ctx, Rect::new(0.0, 0.0, w, h - f * D_BOT_STATUS_HEIGHT));
 
         let mut b = self.game.latest().clone();
+        let to_move = if b.white_to_move() {
+            B::Color::White
+        } else {
+            B::Color::Red
+        };
         if let Ok(m) = self.state.to_move(&b) {
             b.apply_move(&m.into());
         }
         r.draw_board(g, &b);
         if is_active {
             self.draw_cursor(ctx, g, &r);
+        }
+        r.draw_laser(g, &b, to_move);
+
+        if let Some(policy) = self.bot.policy() {
+            r.draw_policy(g, &policy);
         }
 
         self.draw_bot_status(ctx, g);
@@ -247,6 +282,8 @@ impl App {
                         Err(loc) => loc,
                     };
                     AppState::Cursor(loc)
+                } else if let Some(KeyCode::Escape) = input.keycode {
+                    AppState::Cursor(*loc0)
                 } else {
                     let (r0, c0) = loc0.to_rc();
                     let (dr, dc, dd) = {
@@ -277,10 +314,13 @@ impl App {
     }
 }
 
-fn cmd_new_game(_app: &mut App) -> CommandCont {
-    CommandCont::Confirm("Delete current game?".to_string(), Box::new(cmd_new_game_2))
+fn cmd_game_new_game(_app: &mut App) -> CommandCont {
+    CommandCont::Confirm(
+        "Delete current game?".to_string(),
+        Box::new(cmd_game_new_game_2),
+    )
 }
-fn cmd_new_game_2(_app: &mut App, yes: bool) -> CommandCont {
+fn cmd_game_new_game_2(_app: &mut App, yes: bool) -> CommandCont {
     if yes {
         CommandCont::Select(
             "Choose board type".to_string(),
@@ -291,13 +331,13 @@ fn cmd_new_game_2(_app: &mut App, yes: bool) -> CommandCont {
                 "Mercury".to_string(),
                 "Sophie".to_string(),
             ],
-            Box::new(cmd_new_game_3),
+            Box::new(cmd_game_new_game_3),
         )
     } else {
         CommandCont::Done
     }
 }
-fn cmd_new_game_3(app: &mut App, opt: String) -> CommandCont {
+fn cmd_game_new_game_3(app: &mut App, opt: String) -> CommandCont {
     let b = match &opt[..] {
         "Classic" => bb::Board::new_classic(),
         "Imhotep" => bb::Board::new_imhotep(),
@@ -310,16 +350,67 @@ fn cmd_new_game_3(app: &mut App, opt: String) -> CommandCont {
     CommandCont::Done
 }
 
-fn cmd_exit(_app: &mut App) -> CommandCont {
+fn cmd_game_exit(_app: &mut App) -> CommandCont {
     CommandCont::Confirm(
         "Are you sure you want to quit?".to_string(),
-        Box::new(cmd_exit_2),
+        Box::new(cmd_game_exit_2),
     )
 }
-fn cmd_exit_2(_app: &mut App, yes: bool) -> CommandCont {
+fn cmd_game_exit_2(_app: &mut App, yes: bool) -> CommandCont {
     if yes {
         std::process::exit(0)
     } else {
         CommandCont::Done
     }
+}
+
+fn cmd_game_undo(app: &mut App) -> CommandCont {
+    app.undo();
+    CommandCont::Done
+}
+
+fn cmd_bot_set_evals(_app: &mut App) -> CommandCont {
+    CommandCont::Prompt(
+        format!("Enter number of evals:"),
+        Box::new(cmd_bot_set_evals_2),
+    )
+}
+fn cmd_bot_set_evals_2(app: &mut App, input: String) -> CommandCont {
+    let evals: usize = match input.parse() {
+        Ok(n) => n,
+        Err(_) => {
+            return CommandCont::Alert(
+                AlertLevel::Error,
+                format!("Could not parse {:?} as an integer", input),
+            )
+        }
+    };
+    app.bot_evals = evals;
+    app.bot.search(Some(app.bot_evals));
+    CommandCont::Done
+}
+
+fn cmd_bot_set_player(_app: &mut App) -> CommandCont {
+    CommandCont::Select(
+        "Who does the bot play as?".to_string(),
+        vec![
+            "Nobody".to_string(),
+            "As white".to_string(),
+            "As red".to_string(),
+            "As both".to_string(),
+        ],
+        Box::new(cmd_bot_set_player_2),
+    )
+}
+fn cmd_bot_set_player_2(app: &mut App, input: String) -> CommandCont {
+    let (w, r) = match input.as_str() {
+        "Nobody" => (false, false),
+        "As white" => (true, false),
+        "As red" => (false, true),
+        "As both" => (true, true),
+        _ => return CommandCont::Alert(AlertLevel::Error, format!("Unknown option: {:?}", input)),
+    };
+    app.bot_plays_white = w;
+    app.bot_plays_red = r;
+    CommandCont::Done
 }

@@ -842,8 +842,13 @@ impl From<B::Move> for Move {
     }
 }
 
-impl Into<B::Move> for Move {
-    fn into(self) -> B::Move {
+impl TryInto<B::Move> for Move {
+    type Error = ();
+    fn try_into(self) -> Result<B::Move, ()> {
+        if self.s == 0 || self.d == 0 {
+            return Err(());
+        }
+
         let (rs, cs) = to_rc(self.s);
         let (rd, cd) = to_rc(self.d);
 
@@ -865,10 +870,10 @@ impl Into<B::Move> for Move {
             (1, 1) => B::Op::SE,
             (1, -1) => B::Op::SW,
             (-1, -1) => B::Op::NW,
-            _ => unreachable!(),
+            _ => return Err(()),
         };
 
-        B::Move::new(loc, op).unwrap()
+        B::Move::new(loc, op).map_err(|_| ())
     }
 }
 
