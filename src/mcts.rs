@@ -396,6 +396,7 @@ impl Score {
     }
 }
 
+#[cfg(feature = "nightly")]
 #[cfg(test)]
 mod tests {
     use test::{black_box, Bencher};
